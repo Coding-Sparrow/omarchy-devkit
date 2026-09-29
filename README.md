@@ -1,8 +1,9 @@
 # DevKit for Omarchy
 
 The developer tools you reach for every day, one click away on the Omarchy bar:
-JSON, JWT, Base64, URL, timestamps, UUIDs, hashes, case conversion, regex and
-text diff. It opens as a floating window. Do the job, press `Esc`, and you're back.
+JSON, JWT, Base64, URL, timestamps, UUIDs, passwords, hashes, case conversion,
+regex and text diff. It opens as a floating window. Do the job, press `Esc`, and
+you're back.
 
 ![DevKit decoding a JWT](preview.png)
 
@@ -29,6 +30,7 @@ secrets stay out of clipboard history.
 | `Ctrl+8` | **Case Converter** | camel, Pascal, snake, SCREAMING, kebab, Train, dot, path, Title… |
 | `Ctrl+9` | **Regex Tester** | JS regex matches, numbered and named groups, replace with `$1` or `$<name>`. Runs in a separate process with a 1.5 s deadline |
 | `Ctrl+0` | **Text Diff** | Line diff of two texts |
+| `Ctrl+⇧P` | **Password Generator** | Length, count, upper/lower/digits/special sets and a comma-separated exclude list. CSPRNG-only, one character from each selected set. The letter sets skip `I`/`l`. Results under 60 bits are flagged as weak |
 
 ## Screenshots
 
@@ -39,6 +41,7 @@ secrets stay out of clipboard history.
 | **Timestamp**, click a row to copy<br>![Timestamp](screenshots/05-timestamp.png) | **UUID** v7, bulk<br>![UUID](screenshots/06-uuid.png) |
 | **Hash**<br>![Hash](screenshots/07-hash.png) | **Case converter**<br>![Case](screenshots/08-case.png) |
 | **Regex tester** with named groups<br>![Regex](screenshots/09-regex.png) | **Text diff**<br>![Diff](screenshots/10-diff.png) |
+| **Password generator**<br>![Password](screenshots/11-password.png) | |
 
 ## Requirements
 
@@ -48,7 +51,7 @@ secrets stay out of clipboard history.
 
   | Package | Used for |
   | --- | --- |
-  | `python` (`python3`) | `bin/devkit-hash` (hashes, and CSPRNG bytes for UUIDs), `bin/devkit-clip` (bounded clipboard read), `bin/devkit-regex` (regex deadline) |
+  | `python` (`python3`) | `bin/devkit-hash` (hashes, and CSPRNG bytes for UUIDs and passwords), `bin/devkit-clip` (bounded clipboard read), `bin/devkit-regex` (regex deadline) |
   | `qt6-declarative` | Its `qml` runtime runs the regex worker (`bin/devkit-regex-worker.qml`) outside the shell. Quickshell depends on it |
   | `wl-clipboard` | `wl-paste` to read the clipboard, `wl-copy --sensitive` to copy results |
   | `jq` | `bin/devkit-window` reads `hyprctl -j status` |
@@ -86,9 +89,10 @@ Click any row in the Hash, Case or Timestamp output to copy that value.
 | --- | --- |
 | `Ctrl+1…0` | Switch tool |
 | `Ctrl+Tab` / `Ctrl+Shift+Tab` | Next / previous tool |
+| `Ctrl+Shift+P` | Jump to the Password Generator |
 | `Ctrl+Shift+V` | Paste the clipboard into the input |
 | `Ctrl+Shift+C` | Copy the output |
-| `Ctrl+Enter` | Make the output the input (chain, e.g. Base64 → JSON); regenerate in UUID |
+| `Ctrl+Enter` | Make the output the input (chain, e.g. Base64 → JSON); regenerate in UUID and Password |
 | `Ctrl+L` | Clear |
 | `Ctrl+D` | Load the clipboard suggestion |
 | `Esc` | Close |
@@ -129,10 +133,11 @@ omarchy-shell shell summon coding-sparrow.devkit '{"tool":"regex","pattern":"(\\
 omarchy-shell shell summon coding-sparrow.devkit '{"action":"clipboard"}'
 ```
 
-Payload fields: `tool` (`json`, `jwt`, `base64`, `url`, `time`, `uuid`, `hash`,
-`case`, `regex`, `diff`), `mode` (for example `minify`, `decode`, `parse` or
-`v7`), `input`, `input2` (the diff's second text), `pattern`, `flags`,
-`replacement`, and `action: "clipboard"`.
+Payload fields: `tool` (`json`, `jwt`, `base64`, `url`, `time`, `uuid`,
+`password`, `hash`, `case`, `regex`, `diff`), `mode` (for example `minify`,
+`decode`, `parse` or `v7`), `input`, `input2` (the diff's second text),
+`pattern`, `flags`, `replacement`, `length` (password length), `count` (UUIDs
+or passwords), and `action: "clipboard"`.
 
 ## Update
 
@@ -171,9 +176,10 @@ from `~/.config/hypr/bindings.lua` yourself.
   killed after 1.5 s, so a catastrophic pattern such as `(a+)+$` cannot freeze
   the desktop shell. Everything else is linear-time and size-capped; see
   `tests/perf.test.mjs`.
-- **UUIDs use only secure randomness.** Every byte comes from Python's
-  `secrets`. If the pool runs short, generation waits for more bytes. There
-  is no `Math.random()` fallback.
+- **UUIDs and passwords use only secure randomness.** Every byte comes from
+  Python's `secrets`. If the pool runs short, generation waits for more bytes.
+  There is no `Math.random()` fallback. Passwords draw with rejection sampling
+  so every character in a selected set is equally likely.
 - **No config changes.** DevKit never edits your files. The only thing it
   registers is a runtime Hyprland window rule (`hyprctl eval`), which matches
   only a Quickshell window titled `DevKit`.

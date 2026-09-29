@@ -15,6 +15,7 @@ vm.runInContext(fs.readFileSync(path.join(dir, "..", "Tools.js"), "utf8"), T)
 
 const N = 1 << 20
 const BUDGET_MS = 1500
+const MAX_PW_BYTES = Array.from({ length: 65536 }, (_, i) => i & 255)
 const cases = {
   "detect: capitals": () => T.detect("A".repeat(N)),
   "detect: capitals then symbol": () => T.detect("A".repeat(N - 1) + "!"),
@@ -39,6 +40,7 @@ const cases = {
   "jwt: junk": () => T.run("jwt", { input: "a.".repeat(N / 2) }),
   "diff: at the cell cap": () => T.run("diff", { input: "a\n".repeat(2000), input2: "b\n".repeat(2000) }),
   "diff: over the cell cap": () => T.run("diff", { input: "a\n".repeat(N / 4), input2: "b\n".repeat(N / 4) }),
+  "password: largest draw": () => T.run("password", { length: 128, count: 64, upper: true, lower: true, digits: true, special: true, randomBytes: MAX_PW_BYTES }),
 }
 
 for (const [name, fn] of Object.entries(cases)) {

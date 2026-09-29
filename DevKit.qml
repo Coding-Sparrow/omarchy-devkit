@@ -42,7 +42,12 @@ Item {
   property string mode: ""
   property bool useReplace: false
   property bool upper: false
+  property bool pwUpper: true
+  property bool pwLower: true
+  property bool pwDigits: true
+  property bool pwSpecial: true
   property var stash: ({})           // per-tool editor state, session only
+  property bool restoring: false     // true while many fields are set at once
 
   // ---- results
   property string outText: ""
@@ -84,15 +89,25 @@ Item {
     try { payload = JSON.parse(payloadJson || "{}") } catch (e) { payload = ({}) }
     opened = true
     window.visible = true
+    // Apply the whole payload before computing; see selectTool().
+    var wasRestoring = restoring
+    restoring = true
     if (payload.tool) selectTool(String(payload.tool))
     if (payload.mode) mode = String(payload.mode)
     if (payload.input !== undefined) inputEd.text = String(payload.input)
     if (payload.input2 !== undefined) input2Ed.text = String(payload.input2)
-    if (payload.count !== undefined) countField.text = String(Tools.uuidCount(payload.count))
+    // Count means UUIDs for one tool and passwords for the other, and their
+    // limits differ, so clamp it the way the field's validator does.
+    if (payload.count !== undefined)
+      countField.text = String(toolId === "password" ? Tools.passwordCount(payload.count) : Tools.uuidCount(payload.count))
+    if (payload.length !== undefined) lengthField.text = String(Tools.passwordLength(payload.length))
     if (payload.pattern !== undefined) patternField.text = String(payload.pattern)
     if (payload.flags !== undefined) flagsField.text = String(payload.flags)
     if (payload.replacement !== undefined) { replField.text = String(payload.replacement); useReplace = true }
-    if (payload.tool || payload.mode) compute()
+    restoring = wasRestoring
+    if (payload.tool || payload.mode || payload.input !== undefined || payload.input2 !== undefined
+        || payload.count !== undefined || payload.length !== undefined || payload.pattern !== undefined
+        || payload.flags !== undefined || payload.replacement !== undefined) compute()
     readClipboard(payload.action === "clipboard" ? "load" : "hint")
     if (randomPool.length < randomPoolTarget) requestRandom(randomPoolTarget)
     Qt.callLater(focusInput)
@@ -112,7 +127,7 @@ Item {
 
   function focusInput() {
     if (toolId === "regex") patternField.forceActiveFocus()
-    else if (toolId === "uuid") generateButton.forceActiveFocus()
+    else if (toolId === "uuid" || toolId === "password") generateButton.forceActiveFocus()
     else {
       inputEd.area.forceActiveFocus()
       inputEd.area.cursorPosition = inputEd.area.length
@@ -127,7 +142,9 @@ Item {
     next[toolId] = {
       input: inputEd.text, input2: input2Ed.text, mode: mode,
       pattern: patternField.text, flags: flagsField.text, replacement: replField.text,
-      useReplace: useReplace, count: countField.text, upper: upper
+      useReplace: useReplace, count: countField.text, upper: upper,
+      length: lengthField.text, exclude: excludeField.text,
+      pwUpper: pwUpper, pwLower: pwLower, pwDigits: pwDigits, pwSpecial: pwSpecial
     }
     stash = next
   }
@@ -140,6 +157,11 @@ Item {
     initialized = true
     var t = Tools.toolById(id)
     var s = stash[t.id] || ({})
+    // Every field below fires its own onTextChanged, so restore them all first
+    // and compute once. Otherwise a tool runs once per field, and UUIDs and
+    // passwords draw and discard random bytes on each of those runs.
+    var wasRestoring = restoring
+    restoring = true
     toolId = t.id
     mode = s.mode || (t.modes.length ? t.modes[0].value : "")
     useReplace = !!s.useReplace
@@ -149,7 +171,14 @@ Item {
     patternField.text = s.pattern !== undefined ? s.pattern : ""
     flagsField.text = s.flags !== undefined ? s.flags : "g"
     replField.text = s.replacement || ""
-    countField.text = s.count || "5"
+    countField.text = s.count !== undefined ? s.count : (t.id === "password" ? "1" : "5")
+    lengthField.text = s.length !== undefined ? s.length : String(Tools.PASSWORD_LENGTH_DEFAULT)
+    excludeField.text = s.exclude || ""
+    pwUpper = s.pwUpper !== false
+    pwLower = s.pwLower !== false
+    pwDigits = s.pwDigits !== false
+    pwSpecial = s.pwSpecial !== false
+    restoring = wasRestoring
     compute()
     Qt.callLater(focusInput)
   }
@@ -198,6 +227,42 @@ Item {
                                     nowMs: Date.now(), randomBytes: bytes }))
   }
 
+  // Passwords draw from the same CSPRNG pool as UUIDs (bin/devkit-hash random).
+  function passwordOptions() {
+    return { length: lengthField.text, count: countField.text,
+             upper: pwUpper, lower: pwLower, digits: pwDigits, special: pwSpecial,
+             exclude: excludeField.text }
+  }
+
+  function computePassword() {
+    diffRows = []
+    outPairs = []
+    infoUrgent = false
+    var opts = passwordOptions()
+    var invalid = Tools.passwordValidate(opts)
+    if (invalid) {
+      randomWanted = 0
+      outText = ""
+      errText = invalid
+      infoText = ""
+      return
+    }
+    var need = Tools.passwordBytesNeeded(opts.count, opts.length)
+    var bytes = takeRandom(need)
+    if (!bytes) {
+      // Defer until the helper delivers enough secure bytes.
+      randomWanted = need
+      outText = ""
+      errText = randomFailed ? "Secure random source (bin/devkit-hash) is unavailable" : ""
+      infoText = randomFailed ? "" : "Generating…"
+      requestRandom(Math.max(need, randomPoolTarget))
+      return
+    }
+    randomWanted = 0
+    opts.randomBytes = bytes
+    applyResult(Tools.run("password", opts))
+  }
+
   function applyResult(r) {
     outText = r.output
     errText = r.error
@@ -208,8 +273,11 @@ Item {
   }
 
   function compute() {
+    // selectTool() and open() set many fields in a row and compute afterwards.
+    if (restoring) return
     if (toolId === "hash") { computeHash(); return }
     if (toolId === "uuid") { computeUuid(); return }
+    if (toolId === "password") { computePassword(); return }
     if (toolId === "regex") { computeRegex(); return }
     applyResult(Tools.run(toolId, {
       input: inputEd.text, input2: input2Ed.text, mode: mode,
@@ -507,10 +575,10 @@ Item {
     }
     onExited: function (exitCode) {
       if (exitCode !== 0) root.randomFailed = true
-      if (root.randomWanted > 0 && root.toolId === "uuid") {
-        if (root.randomPool.length >= root.randomWanted) root.computeUuid()
+      if (root.randomWanted > 0 && (root.toolId === "uuid" || root.toolId === "password")) {
+        if (root.randomPool.length >= root.randomWanted) root.compute()
         else if (!root.randomFailed) root.requestRandom(root.randomWanted)
-        else root.computeUuid()
+        else root.compute()
       }
     }
   }
@@ -556,16 +624,22 @@ Item {
       Shortcut { sequence: "Ctrl+Shift+C"; onActivated: root.copy(root.outText) }
       Shortcut { sequence: "Ctrl+Shift+V"; onActivated: root.readClipboard("paste") }
       Shortcut { sequence: "Ctrl+L"; onActivated: { inputEd.text = ""; input2Ed.text = ""; root.focusInput() } }
-      Shortcut { sequence: "Ctrl+Return"; onActivated: root.toolId === "uuid" ? root.compute() : root.useOutputAsInput() }
+      Shortcut { sequence: "Ctrl+Return"; onActivated: (root.toolId === "uuid" || root.toolId === "password") ? root.compute() : root.useOutputAsInput() }
       Shortcut { sequence: "Ctrl+D"; enabled: root.clipTool !== ""; onActivated: root.loadClipboardSuggestion() }
       Repeater {
         model: root.tools.length
         delegate: Item {
           id: shortcutHost
           required property int index
+          readonly property var tool: root.tools[shortcutHost.index]
           Shortcut {
-            sequence: "Ctrl+" + ((shortcutHost.index + 1) % 10)
-            onActivated: root.selectTool(root.tools[shortcutHost.index].id)
+            // The first ten tools take Ctrl+1…0. A tool past that names its own
+            // key in TOOLS, so this and the sidebar tooltip cannot drift apart.
+            enabled: shortcutHost.index < 10 || shortcutHost.tool.shortcut !== undefined
+            sequence: shortcutHost.index < 10
+              ? "Ctrl+" + ((shortcutHost.index + 1) % 10)
+              : (shortcutHost.tool.shortcut || "")
+            onActivated: root.selectTool(shortcutHost.tool.id)
           }
         }
       }
@@ -602,7 +676,7 @@ Item {
               text: (modelData.badge + "    ").slice(0, 4) + " " + modelData.name
               foreground: root.foreground
               accent: root.accent
-              tooltipText: "Ctrl+" + ((index + 1) % 10)
+              tooltipText: index < 10 ? "Ctrl+" + ((index + 1) % 10) : (modelData.shortcut || "").replace("Shift+", "⇧")
               onClicked: root.selectTool(modelData.id)
             }
           }
@@ -615,7 +689,7 @@ Item {
             color: root.dim
             font.pixelSize: Style.font.caption
             lineHeight: 1.25
-            text: "Ctrl+1…0   switch tool\nCtrl+Tab   next tool\nCtrl+⇧V    paste input\nCtrl+⇧C    copy output\nCtrl+↵     output → input\nCtrl+L     clear\nEsc        close"
+            text: "Ctrl+1…0   switch tool\nCtrl+Tab   next tool\nCtrl+⇧P    passwords\nCtrl+⇧V    paste input\nCtrl+⇧C    copy output\nCtrl+↵     output → input\nCtrl+L     clear\nEsc        close"
           }
         }
 
@@ -675,7 +749,7 @@ Item {
           RowLayout {
             Layout.fillWidth: true
             spacing: Style.spacing.md
-            visible: root.tool.modes.length > 0 || root.toolId === "regex" || root.toolId === "time"
+            visible: root.tool.modes.length > 0 || root.toolId === "regex" || root.toolId === "time" || root.toolId === "password"
 
             ButtonGroup {
               visible: root.tool.modes.length > 0
@@ -719,18 +793,31 @@ Item {
               onClicked: { root.useReplace = !root.useReplace; root.compute() }
             }
 
-            // uuid
-            Item { visible: root.toolId === "uuid"; Layout.fillWidth: true }
-            PlainText { visible: root.toolId === "uuid"; text: "Count"; color: root.dim }
+            // uuid + password share the Count field and the Generate button
+            Item { visible: root.toolId === "uuid" || root.toolId === "password"; Layout.fillWidth: true }
+            PlainText { visible: root.toolId === "password"; text: "Length"; color: root.dim }
+            TextField {
+              id: lengthField
+              visible: root.toolId === "password"
+              Layout.preferredWidth: Style.space(70)
+              text: String(Tools.PASSWORD_LENGTH_DEFAULT)
+              foreground: root.foreground
+              accent: root.accent
+              validator: IntValidator { bottom: 1; top: Tools.PASSWORD_LENGTH_MAX }
+              onTextChanged: if (root.toolId === "password") root.compute()
+            }
+            PlainText { visible: root.toolId === "uuid" || root.toolId === "password"; text: "Count"; color: root.dim }
             TextField {
               id: countField
-              visible: root.toolId === "uuid"
+              visible: root.toolId === "uuid" || root.toolId === "password"
               Layout.preferredWidth: Style.space(70)
               text: "5"
               foreground: root.foreground
               accent: root.accent
-              validator: IntValidator { bottom: 1; top: 500 }
-              onTextChanged: if (root.toolId === "uuid") root.compute()
+              // UUIDs go up to 500; passwords stop at 100, so the field must
+              // not accept more than the tool will honour.
+              validator: IntValidator { bottom: 1; top: root.toolId === "password" ? Tools.PASSWORD_COUNT_MAX : Tools.UUID_MAX }
+              onTextChanged: if (root.toolId === "uuid" || root.toolId === "password") root.compute()
             }
             Button {
               visible: root.toolId === "uuid"
@@ -743,7 +830,7 @@ Item {
             }
             Button {
               id: generateButton
-              visible: root.toolId === "uuid"
+              visible: root.toolId === "uuid" || root.toolId === "password"
               text: "Generate  (Ctrl+↵)"
               bordered: true
               focusable: true
@@ -775,6 +862,49 @@ Item {
             onTextChanged: root.compute()
           }
 
+          // The character-set toggles share this line with the exclude field:
+          // Length, Count, four toggles and Generate cannot fit on one line.
+          RowLayout {
+            Layout.fillWidth: true
+            visible: root.toolId === "password"
+            spacing: Style.spacing.md
+
+            Button {
+              text: "A-Z"; bordered: true; selected: root.pwUpper
+              foreground: root.foreground; accent: root.accent
+              tooltipText: "Include uppercase letters"
+              onClicked: { root.pwUpper = !root.pwUpper; root.compute() }
+            }
+            Button {
+              text: "a-z"; bordered: true; selected: root.pwLower
+              foreground: root.foreground; accent: root.accent
+              tooltipText: "Include lowercase letters"
+              onClicked: { root.pwLower = !root.pwLower; root.compute() }
+            }
+            Button {
+              text: "0-9"; bordered: true; selected: root.pwDigits
+              foreground: root.foreground; accent: root.accent
+              tooltipText: "Include digits"
+              onClicked: { root.pwDigits = !root.pwDigits; root.compute() }
+            }
+            Button {
+              text: "!@#"; bordered: true; selected: root.pwSpecial
+              foreground: root.foreground; accent: root.accent
+              tooltipText: "Include special characters (!@#$%^&*)"
+              onClicked: { root.pwSpecial = !root.pwSpecial; root.compute() }
+            }
+
+            TextField {
+              id: excludeField
+              Layout.fillWidth: true
+              placeholderText: "Exclude characters (separate with comma), e.g. O,0,l,1"
+              foreground: root.foreground
+              accent: root.accent
+              font.family: root.fontFamily
+              onTextChanged: if (root.toolId === "password") root.compute()
+            }
+          }
+
           // editors
           RowLayout {
             Layout.fillWidth: true
@@ -783,7 +913,7 @@ Item {
             spacing: Style.spacing.lg
 
             Pane {
-              visible: root.toolId !== "uuid"
+              visible: root.toolId !== "uuid" && root.toolId !== "password"
               title: root.toolId === "diff" ? "Original" : (root.toolId === "regex" ? "Test text" : "Input")
               Editor {
                 id: inputEd
@@ -830,7 +960,7 @@ Item {
               }
               actions: [
                 Button {
-                  visible: root.toolId !== "uuid" && root.toolId !== "hash" && root.outPairs.length === 0
+                  visible: root.toolId !== "uuid" && root.toolId !== "hash" && root.toolId !== "password" && root.outPairs.length === 0
                   text: "→ Input"; foreground: root.dim; tooltipText: "Use output as input (Ctrl+↵)"
                   onClicked: root.useOutputAsInput()
                 },
