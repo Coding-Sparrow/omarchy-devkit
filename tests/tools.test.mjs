@@ -91,6 +91,46 @@ assert.equal(run("uuid", { mode: "v4", count: 9999, randomBytes: secure(8000) })
 assert.doesNotMatch(fs.readFileSync(path.join(dir, "..", "Tools.js"), "utf8").replace(/\/\/.*$/gm, ""), /Math\.random/)
 assert.doesNotMatch(fs.readFileSync(path.join(dir, "..", "DevKit.qml"), "utf8").replace(/\/\/.*$/gm, ""), /Math\.random/)
 
+// Password: options and character sets, backed only by the CSPRNG byte pool.
+const zeros = (n) => Array(n).fill(0)
+const pw = { length: 4, count: 1, upper: true, lower: true, digits: true, special: true }
+// With all-zero bytes every unbiased draw lands on index 0, so the result is
+// fully determined by the algorithm — no hidden randomness source.
+assert.equal(run("password", { ...pw, randomBytes: zeros(64) }).output, "0!Aa")
+assert.equal(run("password", { ...pw, randomBytes: zeros(64) }).info, "1 × 4 chars · 24 bits each")
+
+const bulkPw = run("password", { length: 20, count: 5, upper: true, lower: true, digits: true, special: true, randomBytes: zeros(1000) })
+const pws = bulkPw.output.split("\n")
+assert.equal(pws.length, 5)
+for (const line of pws) {
+  assert.equal(line.length, 20)
+  // One character from every selected set is guaranteed.
+  assert.ok(/[A-Z]/.test(line) && /[a-z]/.test(line) && /[0-9]/.test(line) && /[^A-Za-z0-9]/.test(line))
+}
+
+// The letter sets skip the look-alikes "I" and "l"; exclude trims more.
+const letterSets = T.passwordAlphabet({ upper: true, lower: true })
+assert.equal(letterSets.length, 2)
+assert.doesNotMatch(letterSets.join(""), /[Il]/)
+assert.equal(T.passwordAlphabet({ upper: true, exclude: "A,B,C" })[0], "DEFGHJKLMNOPQRSTUVWXYZ")
+assert.equal(T.passwordExcluded("O, 0 ,l1"), "O0l1")
+const exclPw = run("password", { length: 30, count: 20, upper: true, digits: true, exclude: "A,0", randomBytes: zeros(4000) })
+assert.doesNotMatch(exclPw.output, /[A0]/)
+
+// No usable character set is an error, never an empty or weaker password.
+assert.match(run("password", { ...pw, upper: false, lower: false, digits: false, special: false, randomBytes: zeros(64) }).error, /at least one character set/)
+assert.match(run("password", { length: 8, count: 1, upper: true, exclude: "ABCDEFGHJKLMNOPQRSTUVWXYZ", randomBytes: zeros(64) }).error, /at least one character set/)
+assert.match(run("password", { length: 128, count: 100, upper: true, randomBytes: zeros(70000) }).error, /Too many characters/)
+
+// Too few secure bytes: refuse, never fall back.
+assert.match(run("password", { ...pw, randomBytes: zeros(10) }).error, /secure random bytes/)
+assert.equal(run("password", { ...pw }).output, "")
+assert.match(run("password", { ...pw, randomBytes: [...zeros(63), 256] }).error, /Invalid random bytes/)
+// A draw never asks the helper for more than it can return in one call.
+assert.equal(T.passwordCount(9999), 100)
+assert.equal(T.passwordLength(9999), 128)
+assert.ok(T.passwordBytesNeeded(64, 128) <= 65536)
+
 // Case
 const c = run("case", { input: "parseHTTPResponse_code-v2" }).output
 assert.match(c, /camelCase {8}parseHttpResponseCodeV2/)

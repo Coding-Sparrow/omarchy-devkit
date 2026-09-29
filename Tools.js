@@ -29,7 +29,9 @@ var TOOLS = [
   { id: "regex", badge: ".*", name: "Regex Tester", description: "Test JavaScript regular expressions, groups and replace",
     modes: [], placeholder: "Test text…" },
   { id: "diff", badge: "±", name: "Text Diff", description: "Line-by-line diff of two texts",
-    modes: [], placeholder: "Original text…" }
+    modes: [], placeholder: "Original text…" },
+  { id: "password", badge: "PW", name: "Password Generator", description: "CSPRNG passwords with selectable character sets and exclusions; letter sets skip the look-alikes I and l",
+    modes: [], placeholder: "" }
 ]
 
 function toolById(id) {
@@ -443,6 +445,143 @@ function uuidTool(mode, count, nowMs, randomBytes, upper) {
   return result(upper ? text.toUpperCase() : text, "", n + " × UUID " + (mode === "v7" ? "v7" : "v4"))
 }
 
+// ---------------------------------------------------------------- Password
+
+// The letter sets skip the look-alikes "I" and "l", which read as the digit 1
+// on their own.
+var PASSWORD_SETS = {
+  upper: "ABCDEFGHJKLMNOPQRSTUVWXYZ",
+  lower: "abcdefghijkmnopqrstuvwxyz",
+  digits: "0123456789",
+  special: "!@#$%^&*"
+}
+
+var PASSWORD_LENGTH_MAX = 128
+var PASSWORD_COUNT_MAX = 100
+// count × length is capped so a single CSPRNG request can always cover a draw.
+var PASSWORD_MAX_CHARS = 8192
+
+function passwordCount(count) {
+  return Math.max(1, Math.min(PASSWORD_COUNT_MAX, Math.floor(Number(count) || 1)))
+}
+
+function passwordLength(length) {
+  return Math.max(1, Math.min(PASSWORD_LENGTH_MAX, Math.floor(Number(length) || 1)))
+}
+
+// The exclude field is comma-separated. Each token's characters are dropped;
+// whitespace and empty tokens are ignored, so "O,0" excludes both and "abc"
+// excludes all three.
+function passwordExcluded(text) {
+  var out = ""
+  String(text === undefined || text === null ? "" : text).split(",").forEach(function (token) {
+    token = token.trim()
+    for (var i = 0; i < token.length; i++) if (out.indexOf(token[i]) === -1) out += token[i]
+  })
+  return out
+}
+
+// Selected character sets with excluded characters removed. A set that ends
+// up empty (fully excluded) drops out, so every returned set is usable.
+function passwordAlphabet(opts) {
+  var excluded = passwordExcluded(opts.exclude)
+  var selected = []
+  if (opts.upper) selected.push(PASSWORD_SETS.upper)
+  if (opts.lower) selected.push(PASSWORD_SETS.lower)
+  if (opts.digits) selected.push(PASSWORD_SETS.digits)
+  if (opts.special) selected.push(PASSWORD_SETS.special)
+  var sets = []
+  selected.forEach(function (set) {
+    var kept = ""
+    for (var i = 0; i < set.length; i++) if (excluded.indexOf(set[i]) === -1) kept += set[i]
+    if (kept.length) sets.push(kept)
+  })
+  return sets
+}
+
+function passwordValidate(opts) {
+  if (passwordAlphabet(opts).length === 0)
+    return "Select at least one character set (excluded characters may have emptied them)"
+  if (passwordCount(opts.count) * passwordLength(opts.length) > PASSWORD_MAX_CHARS)
+    return "Too many characters at once (" + PASSWORD_MAX_CHARS + " max)"
+  return ""
+}
+
+// Bytes of CSPRNG output a request may consume: two bytes per draw plus the
+// fixed work per password, with roughly 50% headroom over rejection sampling.
+function passwordBytesNeeded(count, length) {
+  return Math.min(65536, passwordCount(count) * (passwordLength(length) * 6 + 32))
+}
+
+// Unbiased draw in [0, k) from the byte stream, or -1 when it runs dry.
+// Rejection sampling keeps every character equally likely; for the alphabets
+// here (k ≤ ~95) the rejection chance per draw is under 0.15%.
+function passwordDraw(state, k) {
+  var limit = Math.floor(65536 / k) * k
+  while (state.pos + 2 <= state.bytes.length) {
+    var v = (state.bytes[state.pos] << 8) | state.bytes[state.pos + 1]
+    state.pos += 2
+    if (v < limit) return v % k
+  }
+  return -1
+}
+
+function passwordShuffle(state, items) {
+  for (var i = items.length - 1; i > 0; i--) {
+    var j = passwordDraw(state, i + 1)
+    if (j < 0) return false
+    var t = items[i]; items[i] = items[j]; items[j] = t
+  }
+  return true
+}
+
+// One password: a character from every selected set, filled to `length` from
+// the combined alphabet, then shuffled so the guaranteed characters are not
+// stuck at the front. Returns null when the byte stream runs out.
+function passwordOne(sets, length, state) {
+  var groups = sets.slice(0)
+  if (!passwordShuffle(state, groups)) return null
+  var chars = []
+  for (var s = 0; s < groups.length && chars.length < length; s++) {
+    var idx = passwordDraw(state, groups[s].length)
+    if (idx < 0) return null
+    chars.push(groups[s][idx])
+  }
+  var flat = sets.join("")
+  while (chars.length < length) {
+    var k = passwordDraw(state, flat.length)
+    if (k < 0) return null
+    chars.push(flat[k])
+  }
+  if (!passwordShuffle(state, chars)) return null
+  return chars.join("")
+}
+
+// `randomBytes` must come from a CSPRNG. Like UUIDs there is no Math.random()
+// path: too few bytes yields a "waiting" error, never a weaker password.
+function passwordTool(opts, randomBytes) {
+  var invalid = passwordValidate(opts)
+  if (invalid) return result("", invalid)
+  var bytes = randomBytes || []
+  for (var b = 0; b < bytes.length; b++) {
+    if (typeof bytes[b] !== "number" || bytes[b] < 0 || bytes[b] > 255 || bytes[b] !== Math.floor(bytes[b]))
+      return result("", "Invalid random bytes")
+  }
+  var sets = passwordAlphabet(opts)
+  var count = passwordCount(opts.count)
+  var length = passwordLength(opts.length)
+  var state = { bytes: bytes, pos: 0 }
+  var out = []
+  for (var i = 0; i < count; i++) {
+    var pw = passwordOne(sets, length, state)
+    if (pw === null) return result("", "Waiting for secure random bytes…")
+    out.push(pw)
+  }
+  var alphabet = sets.join("").length
+  var bits = Math.floor(length * Math.log(alphabet) / Math.LN2)
+  return result(out.join("\n"), "", count + " × " + length + " chars · " + bits + " bits each")
+}
+
 // ---------------------------------------------------------------- Case
 
 var CASE_MAX = 10000
@@ -658,6 +797,7 @@ function run(toolId, state) {
   case "url": return urlTool(input, state.mode || "encode")
   case "time": return timeTool(input, state.nowMs)
   case "uuid": return uuidTool(state.mode || "v4", state.count, state.nowMs, state.randomBytes, state.upper)
+  case "password": return passwordTool(state, state.randomBytes)
   case "case": return caseTool(input)
   case "regex": return regexTool(String(state.pattern || ""), String(state.flags || ""), input, String(state.replacement || ""), !!state.useReplace)
   case "diff": return diffTool(input, String(state.input2 || ""))
