@@ -1,0 +1,44 @@
+#!/usr/bin/env python3
+"""Hashes and CSPRNG bytes for DevKit.
+
+    devkit-hash < payload     -> {"md5":…,"sha1":…,"sha256":…,"sha512":…,"bytes":N}
+    devkit-hash random N      -> {"random":"<hex of N bytes>"}
+
+The payload is read from stdin, never argv, since argv is visible to every
+process through /proc/<pid>/cmdline. Always prints one JSON object.
+"""
+
+import hashlib
+import json
+import secrets
+import sys
+
+MAX_INPUT_BYTES = 20_000_000
+
+
+def emit(obj):
+    json.dump(obj, sys.stdout)
+    sys.stdout.write("\n")
+
+
+def main(argv):
+    if len(argv) == 3 and argv[1] == "random":
+        n = max(1, min(65536, int(argv[2])))
+        emit({"random": secrets.token_hex(n)})
+        return 0
+    if len(argv) > 1:
+        emit({"error": "unknown arguments"})
+        return 1
+    payload = sys.stdin.buffer.read(MAX_INPUT_BYTES)
+    emit({
+        "md5": hashlib.md5(payload).hexdigest(),
+        "sha1": hashlib.sha1(payload).hexdigest(),
+        "sha256": hashlib.sha256(payload).hexdigest(),
+        "sha512": hashlib.sha512(payload).hexdigest(),
+        "bytes": len(payload),
+    })
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

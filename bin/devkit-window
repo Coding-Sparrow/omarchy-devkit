@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# Register a Hyprland window rule so the DevKit window opens floating,
+# centered and sized, instead of being tiled. Re-run after config reloads.
+set -euo pipefail
+
+width=${1:-}
+height=${2:-}
+
+[[ $width =~ ^[0-9]+$ && $height =~ ^[0-9]+$ ]] || {
+  echo "usage: devkit-window WIDTH HEIGHT" >&2
+  exit 2
+}
+
+[[ $(hyprctl -j status | jq -r '.configProvider // ""') == lua ]] || exit 2
+
+read -r -d '' setup <<LUA || true
+if _G.coding_sparrow_devkit_window_rule then
+  _G.coding_sparrow_devkit_window_rule:set_enabled(false)
+end
+
+_G.coding_sparrow_devkit_window_rule = hl.window_rule({
+  name = "coding-sparrow-devkit",
+  match = {
+    initial_class = "^org[.]quickshell$",
+    initial_title = "^DevKit$",
+  },
+  float = true,
+  center = true,
+  size = { $width, $height },
+})
+LUA
+
+response=$(hyprctl eval "$setup")
+[[ $response == ok ]] || {
+  echo "$response" >&2
+  exit 1
+}

@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "id": "coding-sparrow.devkit",
+  "name": "DevKit",
+  "version": "0.1.0",
+  "author": "Coding-Sparrow",
+  "license": "MIT",
+  "description": "Everyday developer tools in a floating window: JSON, JWT, Base64, URL, timestamps, UUIDs, hashes, case, regex and diff. Offline.",
+  "homepage": "https://github.com/Coding-Sparrow/omarchy-devkit",
+  "repository": "https://github.com/Coding-Sparrow/omarchy-devkit",
+  "keywords": ["developer", "json", "jwt", "base64", "uuid", "regex", "diff", "devtoys"],
+  "kinds": ["panel", "bar-widget"],
+  "keepLoaded": true,
+  "entryPoints": {
+    "panel": "DevKit.qml",
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "DevKit",
+    "description": "Open everyday developer tools",
+    "category": "Developer Tools",
+    "aliases": ["json", "jwt", "base64", "uuid", "devtoys", "decode"],
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}
