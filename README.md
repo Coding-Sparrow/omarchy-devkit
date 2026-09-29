@@ -30,7 +30,7 @@ secrets stay out of clipboard history.
 | `Ctrl+8` | **Case Converter** | camel, Pascal, snake, SCREAMING, kebab, Train, dot, path, Title… |
 | `Ctrl+9` | **Regex Tester** | JS regex matches, numbered and named groups, replace with `$1` or `$<name>`. Runs in a separate process with a 1.5 s deadline |
 | `Ctrl+0` | **Text Diff** | Line diff of two texts |
-| `Ctrl+⇧P` | **Password Generator** | Length, count, upper/lower/digits/special sets and a comma-separated exclude list. CSPRNG-only, one character from each selected set. The letter sets skip `I`/`l` |
+| `Ctrl+⇧P` | **Password Generator** | Length, count, upper/lower/digits/special sets and a comma-separated exclude list. CSPRNG-only, one character from each selected set. The letter sets skip `I`/`l`. Results under 60 bits are flagged as weak |
 
 ## Screenshots
 

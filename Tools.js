@@ -30,8 +30,9 @@ var TOOLS = [
     modes: [], placeholder: "Test text…" },
   { id: "diff", badge: "±", name: "Text Diff", description: "Line-by-line diff of two texts",
     modes: [], placeholder: "Original text…" },
-  { id: "password", badge: "PW", name: "Password Generator", description: "CSPRNG passwords with selectable character sets and exclusions; letter sets skip the look-alikes I and l",
-    modes: [], placeholder: "" }
+  { id: "password", badge: "PW", name: "Password Generator", description: "CSPRNG passwords; letter sets skip I and l",
+    // Tools past the tenth have no Ctrl+digit key, so they name their own.
+    shortcut: "Ctrl+Shift+P", modes: [], placeholder: "" }
 ]
 
 function toolById(id) {
@@ -457,16 +458,23 @@ var PASSWORD_SETS = {
 }
 
 var PASSWORD_LENGTH_MAX = 128
+var PASSWORD_LENGTH_DEFAULT = 16
 var PASSWORD_COUNT_MAX = 100
 // count × length is capped so a single CSPRNG request can always cover a draw.
 var PASSWORD_MAX_CHARS = 8192
+// Below this many bits a result is called out as weak.
+var PASSWORD_WEAK_BITS = 60
 
 function passwordCount(count) {
   return Math.max(1, Math.min(PASSWORD_COUNT_MAX, Math.floor(Number(count) || 1)))
 }
 
+// An empty or unreadable length — the moment a field is cleared to retype it —
+// falls back to the default rather than generating a 1-character password.
 function passwordLength(length) {
-  return Math.max(1, Math.min(PASSWORD_LENGTH_MAX, Math.floor(Number(length) || 1)))
+  var n = Math.floor(Number(length))
+  if (!isFinite(n) || n < 1) n = PASSWORD_LENGTH_DEFAULT
+  return Math.min(PASSWORD_LENGTH_MAX, n)
 }
 
 // The exclude field is comma-separated. Each token's characters are dropped;
@@ -579,7 +587,10 @@ function passwordTool(opts, randomBytes) {
   }
   var alphabet = sets.join("").length
   var bits = Math.floor(length * Math.log(alphabet) / Math.LN2)
-  return result(out.join("\n"), "", count + " × " + length + " chars · " + bits + " bits each")
+  var weak = bits < PASSWORD_WEAK_BITS
+  return { output: out.join("\n"), error: "",
+           info: count + " × " + length + " chars · " + bits + " bits each" + (weak ? " · weak" : ""),
+           urgent: weak }
 }
 
 // ---------------------------------------------------------------- Case

@@ -14,6 +14,11 @@ vm.runInContext(fs.readFileSync(path.join(dir, "..", "Tools.js"), "utf8"), T)
 const NOW = Date.UTC(2024, 0, 1, 12, 0, 0)
 const run = (tool, state) => T.run(tool, { nowMs: NOW, ...state })
 
+// The first ten tools take Ctrl+1…0 from their sidebar position; anything past
+// that must declare its own key, which both the Shortcut and the tooltip read.
+T.TOOLS.slice(10).forEach((t) => assert.match(t.shortcut, /^Ctrl\+(Shift\+)?[A-Za-z0-9]$/))
+assert.equal(T.toolById("password").shortcut, "Ctrl+Shift+P")
+
 // UTF-8 + Base64 round trip, incl. astral chars
 for (const s of ["", "hello", "héllo wörld", "日本語", "emoji 😀 ok"]) {
   assert.equal(T.utf8Decode(T.utf8Encode(s)), s)
@@ -97,11 +102,16 @@ const pw = { length: 4, count: 1, upper: true, lower: true, digits: true, specia
 // With all-zero bytes every unbiased draw lands on index 0, so the result is
 // fully determined by the algorithm — no hidden randomness source.
 assert.equal(run("password", { ...pw, randomBytes: zeros(64) }).output, "0!Aa")
-assert.equal(run("password", { ...pw, randomBytes: zeros(64) }).info, "1 × 4 chars · 24 bits each")
+// 4 characters is under the weak threshold, so it is flagged rather than
+// silently presented as a strong password.
+const shortPw = run("password", { ...pw, randomBytes: zeros(64) })
+assert.equal(shortPw.info, "1 × 4 chars · 24 bits each · weak")
+assert.equal(shortPw.urgent, true)
 
 const bulkPw = run("password", { length: 20, count: 5, upper: true, lower: true, digits: true, special: true, randomBytes: zeros(1000) })
 const pws = bulkPw.output.split("\n")
 assert.equal(pws.length, 5)
+assert.equal(bulkPw.urgent, false)
 for (const line of pws) {
   assert.equal(line.length, 20)
   // One character from every selected set is guaranteed.
@@ -122,12 +132,28 @@ assert.match(run("password", { ...pw, upper: false, lower: false, digits: false,
 assert.match(run("password", { length: 8, count: 1, upper: true, exclude: "ABCDEFGHJKLMNOPQRSTUVWXYZ", randomBytes: zeros(64) }).error, /at least one character set/)
 assert.match(run("password", { length: 128, count: 100, upper: true, randomBytes: zeros(70000) }).error, /Too many characters/)
 
+// An empty or unreadable length — the moment a field is cleared to retype it —
+// falls back to the default instead of a 1-character, low-entropy password.
+assert.equal(T.passwordLength(""), 16)
+assert.equal(T.passwordLength("abc"), 16)
+const defaultedPw = run("password", { ...pw, length: "", randomBytes: zeros(128) })
+assert.equal(defaultedPw.output.length, 16)
+assert.equal(defaultedPw.info, "1 × 16 chars · 97 bits each")
+
+// A result under the weak threshold says so, so an alphabet excluded down to a
+// single character cannot pass as a strong password.
+const weakPw = run("password", { length: 8, count: 1, upper: false, lower: false, digits: false, special: true, exclude: "!,@,#,$,%,^,&", randomBytes: zeros(64) })
+assert.equal(weakPw.output, "********")
+assert.equal(weakPw.urgent, true)
+assert.equal(weakPw.info, "1 × 8 chars · 0 bits each · weak")
+
 // Too few secure bytes: refuse, never fall back.
 assert.match(run("password", { ...pw, randomBytes: zeros(10) }).error, /secure random bytes/)
 assert.equal(run("password", { ...pw }).output, "")
 assert.match(run("password", { ...pw, randomBytes: [...zeros(63), 256] }).error, /Invalid random bytes/)
 // A draw never asks the helper for more than it can return in one call.
 assert.equal(T.passwordCount(9999), 100)
+assert.equal(T.passwordCount(300), 100)   // matches the field's validator top
 assert.equal(T.passwordLength(9999), 128)
 assert.ok(T.passwordBytesNeeded(64, 128) <= 65536)
 

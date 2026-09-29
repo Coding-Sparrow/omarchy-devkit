@@ -47,6 +47,7 @@ Item {
   property bool pwDigits: true
   property bool pwSpecial: true
   property var stash: ({})           // per-tool editor state, session only
+  property bool restoring: false     // true while many fields are set at once
 
   // ---- results
   property string outText: ""
@@ -88,16 +89,25 @@ Item {
     try { payload = JSON.parse(payloadJson || "{}") } catch (e) { payload = ({}) }
     opened = true
     window.visible = true
+    // Apply the whole payload before computing; see selectTool().
+    var wasRestoring = restoring
+    restoring = true
     if (payload.tool) selectTool(String(payload.tool))
     if (payload.mode) mode = String(payload.mode)
     if (payload.input !== undefined) inputEd.text = String(payload.input)
     if (payload.input2 !== undefined) input2Ed.text = String(payload.input2)
-    if (payload.count !== undefined) countField.text = String(Tools.uuidCount(payload.count))
+    // Count means UUIDs for one tool and passwords for the other, and their
+    // limits differ, so clamp it the way the field's validator does.
+    if (payload.count !== undefined)
+      countField.text = String(toolId === "password" ? Tools.passwordCount(payload.count) : Tools.uuidCount(payload.count))
     if (payload.length !== undefined) lengthField.text = String(Tools.passwordLength(payload.length))
     if (payload.pattern !== undefined) patternField.text = String(payload.pattern)
     if (payload.flags !== undefined) flagsField.text = String(payload.flags)
     if (payload.replacement !== undefined) { replField.text = String(payload.replacement); useReplace = true }
-    if (payload.tool || payload.mode) compute()
+    restoring = wasRestoring
+    if (payload.tool || payload.mode || payload.input !== undefined || payload.input2 !== undefined
+        || payload.count !== undefined || payload.length !== undefined || payload.pattern !== undefined
+        || payload.flags !== undefined || payload.replacement !== undefined) compute()
     readClipboard(payload.action === "clipboard" ? "load" : "hint")
     if (randomPool.length < randomPoolTarget) requestRandom(randomPoolTarget)
     Qt.callLater(focusInput)
@@ -147,6 +157,11 @@ Item {
     initialized = true
     var t = Tools.toolById(id)
     var s = stash[t.id] || ({})
+    // Every field below fires its own onTextChanged, so restore them all first
+    // and compute once. Otherwise a tool runs once per field, and UUIDs and
+    // passwords draw and discard random bytes on each of those runs.
+    var wasRestoring = restoring
+    restoring = true
     toolId = t.id
     mode = s.mode || (t.modes.length ? t.modes[0].value : "")
     useReplace = !!s.useReplace
@@ -157,12 +172,13 @@ Item {
     flagsField.text = s.flags !== undefined ? s.flags : "g"
     replField.text = s.replacement || ""
     countField.text = s.count !== undefined ? s.count : (t.id === "password" ? "1" : "5")
-    lengthField.text = s.length !== undefined ? s.length : "16"
+    lengthField.text = s.length !== undefined ? s.length : String(Tools.PASSWORD_LENGTH_DEFAULT)
     excludeField.text = s.exclude || ""
     pwUpper = s.pwUpper !== false
     pwLower = s.pwLower !== false
     pwDigits = s.pwDigits !== false
     pwSpecial = s.pwSpecial !== false
+    restoring = wasRestoring
     compute()
     Qt.callLater(focusInput)
   }
@@ -222,7 +238,8 @@ Item {
     diffRows = []
     outPairs = []
     infoUrgent = false
-    var invalid = Tools.passwordValidate(passwordOptions())
+    var opts = passwordOptions()
+    var invalid = Tools.passwordValidate(opts)
     if (invalid) {
       randomWanted = 0
       outText = ""
@@ -230,7 +247,7 @@ Item {
       infoText = ""
       return
     }
-    var need = Tools.passwordBytesNeeded(countField.text, lengthField.text)
+    var need = Tools.passwordBytesNeeded(opts.count, opts.length)
     var bytes = takeRandom(need)
     if (!bytes) {
       // Defer until the helper delivers enough secure bytes.
@@ -242,11 +259,8 @@ Item {
       return
     }
     randomWanted = 0
-    applyResult(Tools.run("password", {
-      length: lengthField.text, count: countField.text,
-      upper: pwUpper, lower: pwLower, digits: pwDigits, special: pwSpecial,
-      exclude: excludeField.text, randomBytes: bytes
-    }))
+    opts.randomBytes = bytes
+    applyResult(Tools.run("password", opts))
   }
 
   function applyResult(r) {
@@ -259,6 +273,8 @@ Item {
   }
 
   function compute() {
+    // selectTool() and open() set many fields in a row and compute afterwards.
+    if (restoring) return
     if (toolId === "hash") { computeHash(); return }
     if (toolId === "uuid") { computeUuid(); return }
     if (toolId === "password") { computePassword(); return }
@@ -609,19 +625,21 @@ Item {
       Shortcut { sequence: "Ctrl+Shift+V"; onActivated: root.readClipboard("paste") }
       Shortcut { sequence: "Ctrl+L"; onActivated: { inputEd.text = ""; input2Ed.text = ""; root.focusInput() } }
       Shortcut { sequence: "Ctrl+Return"; onActivated: (root.toolId === "uuid" || root.toolId === "password") ? root.compute() : root.useOutputAsInput() }
-      Shortcut { sequence: "Ctrl+Shift+P"; onActivated: root.selectTool("password") }
       Shortcut { sequence: "Ctrl+D"; enabled: root.clipTool !== ""; onActivated: root.loadClipboardSuggestion() }
       Repeater {
         model: root.tools.length
         delegate: Item {
           id: shortcutHost
           required property int index
+          readonly property var tool: root.tools[shortcutHost.index]
           Shortcut {
-            // Only the first ten tools keep a Ctrl+digit key; the rest use
-            // Ctrl+Tab or their own shortcut.
-            enabled: shortcutHost.index < 10
-            sequence: "Ctrl+" + ((shortcutHost.index + 1) % 10)
-            onActivated: root.selectTool(root.tools[shortcutHost.index].id)
+            // The first ten tools take Ctrl+1…0. A tool past that names its own
+            // key in TOOLS, so this and the sidebar tooltip cannot drift apart.
+            enabled: shortcutHost.index < 10 || shortcutHost.tool.shortcut !== undefined
+            sequence: shortcutHost.index < 10
+              ? "Ctrl+" + ((shortcutHost.index + 1) % 10)
+              : (shortcutHost.tool.shortcut || "")
+            onActivated: root.selectTool(shortcutHost.tool.id)
           }
         }
       }
@@ -658,7 +676,7 @@ Item {
               text: (modelData.badge + "    ").slice(0, 4) + " " + modelData.name
               foreground: root.foreground
               accent: root.accent
-              tooltipText: index < 10 ? "Ctrl+" + ((index + 1) % 10) : (modelData.id === "password" ? "Ctrl+⇧P" : "")
+              tooltipText: index < 10 ? "Ctrl+" + ((index + 1) % 10) : (modelData.shortcut || "").replace("Shift+", "⇧")
               onClicked: root.selectTool(modelData.id)
             }
           }
@@ -782,10 +800,10 @@ Item {
               id: lengthField
               visible: root.toolId === "password"
               Layout.preferredWidth: Style.space(70)
-              text: "16"
+              text: String(Tools.PASSWORD_LENGTH_DEFAULT)
               foreground: root.foreground
               accent: root.accent
-              validator: IntValidator { bottom: 1; top: 128 }
+              validator: IntValidator { bottom: 1; top: Tools.PASSWORD_LENGTH_MAX }
               onTextChanged: if (root.toolId === "password") root.compute()
             }
             PlainText { visible: root.toolId === "uuid" || root.toolId === "password"; text: "Count"; color: root.dim }
@@ -796,7 +814,9 @@ Item {
               text: "5"
               foreground: root.foreground
               accent: root.accent
-              validator: IntValidator { bottom: 1; top: 500 }
+              // UUIDs go up to 500; passwords stop at 100, so the field must
+              // not accept more than the tool will honour.
+              validator: IntValidator { bottom: 1; top: root.toolId === "password" ? Tools.PASSWORD_COUNT_MAX : Tools.UUID_MAX }
               onTextChanged: if (root.toolId === "uuid" || root.toolId === "password") root.compute()
             }
             Button {
@@ -807,35 +827,6 @@ Item {
               foreground: root.foreground
               accent: root.accent
               onClicked: { root.upper = !root.upper; root.compute() }
-            }
-            // password character sets
-            Button {
-              visible: root.toolId === "password"
-              text: "A-Z"; bordered: true; selected: root.pwUpper
-              foreground: root.foreground; accent: root.accent
-              tooltipText: "Include uppercase letters"
-              onClicked: { root.pwUpper = !root.pwUpper; root.compute() }
-            }
-            Button {
-              visible: root.toolId === "password"
-              text: "a-z"; bordered: true; selected: root.pwLower
-              foreground: root.foreground; accent: root.accent
-              tooltipText: "Include lowercase letters"
-              onClicked: { root.pwLower = !root.pwLower; root.compute() }
-            }
-            Button {
-              visible: root.toolId === "password"
-              text: "0-9"; bordered: true; selected: root.pwDigits
-              foreground: root.foreground; accent: root.accent
-              tooltipText: "Include digits"
-              onClicked: { root.pwDigits = !root.pwDigits; root.compute() }
-            }
-            Button {
-              visible: root.toolId === "password"
-              text: "!@#"; bordered: true; selected: root.pwSpecial
-              foreground: root.foreground; accent: root.accent
-              tooltipText: "Include special characters (!@#$%^&*)"
-              onClicked: { root.pwSpecial = !root.pwSpecial; root.compute() }
             }
             Button {
               id: generateButton
@@ -871,15 +862,47 @@ Item {
             onTextChanged: root.compute()
           }
 
-          TextField {
-            id: excludeField
-            visible: root.toolId === "password"
+          // The character-set toggles share this line with the exclude field:
+          // Length, Count, four toggles and Generate cannot fit on one line.
+          RowLayout {
             Layout.fillWidth: true
-            placeholderText: "Exclude characters (separate with comma), e.g. O,0,l,1"
-            foreground: root.foreground
-            accent: root.accent
-            font.family: root.fontFamily
-            onTextChanged: if (root.toolId === "password") root.compute()
+            visible: root.toolId === "password"
+            spacing: Style.spacing.md
+
+            Button {
+              text: "A-Z"; bordered: true; selected: root.pwUpper
+              foreground: root.foreground; accent: root.accent
+              tooltipText: "Include uppercase letters"
+              onClicked: { root.pwUpper = !root.pwUpper; root.compute() }
+            }
+            Button {
+              text: "a-z"; bordered: true; selected: root.pwLower
+              foreground: root.foreground; accent: root.accent
+              tooltipText: "Include lowercase letters"
+              onClicked: { root.pwLower = !root.pwLower; root.compute() }
+            }
+            Button {
+              text: "0-9"; bordered: true; selected: root.pwDigits
+              foreground: root.foreground; accent: root.accent
+              tooltipText: "Include digits"
+              onClicked: { root.pwDigits = !root.pwDigits; root.compute() }
+            }
+            Button {
+              text: "!@#"; bordered: true; selected: root.pwSpecial
+              foreground: root.foreground; accent: root.accent
+              tooltipText: "Include special characters (!@#$%^&*)"
+              onClicked: { root.pwSpecial = !root.pwSpecial; root.compute() }
+            }
+
+            TextField {
+              id: excludeField
+              Layout.fillWidth: true
+              placeholderText: "Exclude characters (separate with comma), e.g. O,0,l,1"
+              foreground: root.foreground
+              accent: root.accent
+              font.family: root.fontFamily
+              onTextChanged: if (root.toolId === "password") root.compute()
+            }
           }
 
           // editors
