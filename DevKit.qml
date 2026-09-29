@@ -79,6 +79,9 @@ Item {
     if (payload.mode) mode = String(payload.mode)
     if (payload.input !== undefined) inputEd.text = String(payload.input)
     if (payload.input2 !== undefined) input2Ed.text = String(payload.input2)
+    if (payload.pattern !== undefined) patternField.text = String(payload.pattern)
+    if (payload.flags !== undefined) flagsField.text = String(payload.flags)
+    if (payload.replacement !== undefined) { replField.text = String(payload.replacement); useReplace = true }
     if (payload.tool || payload.mode) compute()
     readClipboard(payload.action === "clipboard" ? "load" : "hint")
     if (randomPool.length < 256) refillRandom()

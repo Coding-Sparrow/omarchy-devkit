@@ -3,6 +3,8 @@
 The developer tools you reach for every day, one click away on the Omarchy bar.
 It opens as a floating window: do the job, press `Esc`, and you're back.
 
+![DevKit decoding a JWT](preview.png)
+
 Everything runs locally inside `omarchy-shell`. There are no network requests
 and nothing is written to disk. Copies use `wl-copy --sensitive`, so decoded
 secrets stay out of clipboard history.
@@ -28,6 +30,16 @@ tool (`Ctrl+D`). Right-clicking the bar icon does this straight away.
 
 Click any row in Hash, Case or Timestamp output to copy that value.
 
+## Screenshots
+
+| | |
+| --- | --- |
+| **JSON**, formatted and validated<br>![JSON](screenshots/01-json.png) | **JWT**, decoded with time claims<br>![JWT](screenshots/02-jwt.png) |
+| **Base64** decode<br>![Base64](screenshots/03-base64.png) | **URL**, parsed into parts and query params<br>![URL](screenshots/04-url.png) |
+| **Timestamp**, click a row to copy<br>![Timestamp](screenshots/05-timestamp.png) | **UUID** v7, bulk<br>![UUID](screenshots/06-uuid.png) |
+| **Hash**<br>![Hash](screenshots/07-hash.png) | **Case converter**<br>![Case](screenshots/08-case.png) |
+| **Regex tester** with groups<br>![Regex](screenshots/09-regex.png) | **Text diff**<br>![Diff](screenshots/10-diff.png) |
+
 ## Keys
 
 | Key | Action |
@@ -52,10 +64,11 @@ omarchy plugin add https://github.com/Coding-Sparrow/omarchy-devkit.git --enable
 The icon goes on the right of the bar. Move it with
 `omarchy bar move coding-sparrow.devkit --after <widget-id>`.
 
-Optional keybinding in `~/.config/hypr/bindings.lua`:
+Optional keybinding in `~/.config/hypr/bindings.lua`. `Super+Alt+D` is free on a
+stock Omarchy install; `Super+Ctrl+D` is not (it opens Display settings):
 
 ```lua
-o.bind("SUPER CTRL, D", "DevKit", "omarchy-shell shell toggle coding-sparrow.devkit")
+o.bind("SUPER + ALT + D", "DevKit", "omarchy-shell shell toggle coding-sparrow.devkit")
 ```
 
 To open a specific tool, or pass input from a script:
