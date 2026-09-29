@@ -189,11 +189,14 @@ Processes DevKit runs: `wl-paste`, `wl-copy`, `bin/devkit-hash` (Python) and
 
 ## Develop
 
+Keep a checkout of this repository wherever you like, and symlink it to
+`~/.config/omarchy/plugins/coding-sparrow.devkit` in place of an installed
+copy. Then:
+
 ```bash
-git clone https://github.com/Coding-Sparrow/omarchy-devkit.git ~/code/omarchy-devkit
-ln -s ~/code/omarchy-devkit ~/.config/omarchy/plugins/coding-sparrow.devkit
 omarchy plugin enable coding-sparrow.devkit
 tests/run                    # manifest, helpers and all tool logic (needs node)
+omarchy restart shell        # load QML edits
 ```
 
 `Tools.js` holds all the logic as pure functions, loaded by both QML and the node
