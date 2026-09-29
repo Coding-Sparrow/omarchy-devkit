@@ -24,10 +24,10 @@ secrets stay out of clipboard history.
 | `Ctrl+3` | **Base64** | Encode, decode, URL-safe. Full UTF-8; binary is shown as hex |
 | `Ctrl+4` | **URL** | Encode/decode components; parse a URL into host, port, path and query params |
 | `Ctrl+5` | **Timestamp** | Epoch in s/ms/µs/ns ⇄ ISO, local, RFC 2822, relative. Empty input shows a live "now" |
-| `Ctrl+6` | **UUID** | v4 and v7, in bulk, optional uppercase. Uses a CSPRNG (Python `secrets`) |
+| `Ctrl+6` | **UUID** | v4 and v7, up to 500 at a time, optional uppercase. Only CSPRNG bytes (Python `secrets`), never `Math.random()` |
 | `Ctrl+7` | **Hash** | MD5, SHA-1, SHA-256, SHA-512 |
 | `Ctrl+8` | **Case Converter** | camel, Pascal, snake, SCREAMING, kebab, Train, dot, path, Title… |
-| `Ctrl+9` | **Regex Tester** | JS regex matches, numbered and named groups, replace with `$1` or `$<name>` |
+| `Ctrl+9` | **Regex Tester** | JS regex matches, numbered and named groups, replace with `$1` or `$<name>`. Runs in a separate process with a 1.5 s deadline |
 | `Ctrl+0` | **Text Diff** | Line diff of two texts |
 
 ## Screenshots
@@ -48,7 +48,8 @@ secrets stay out of clipboard history.
 
   | Package | Used for |
   | --- | --- |
-  | `python` (`python3`) | `bin/devkit-hash`: hashes (`hashlib`) and random bytes for UUIDs (`secrets`) |
+  | `python` (`python3`) | `bin/devkit-hash` (hashes, and CSPRNG bytes for UUIDs), `bin/devkit-clip` (bounded clipboard read), `bin/devkit-regex` (regex deadline) |
+  | `qt6-declarative` | Its `qml` runtime runs the regex worker (`bin/devkit-regex-worker.qml`) outside the shell. Quickshell depends on it |
   | `wl-clipboard` | `wl-paste` to read the clipboard, `wl-copy --sensitive` to copy results |
   | `jq` | `bin/devkit-window` reads `hyprctl -j status` |
   | `hyprland` | `hyprctl eval` registers the window rule that floats and centers the window |
@@ -162,11 +163,25 @@ from `~/.config/hypr/bindings.lua` yourself.
 - **No network.** DevKit never makes a request.
 - **Nothing on disk.** Inputs live in memory only and are gone when the shell
   restarts.
+- **Bounded clipboard reads.** `bin/devkit-clip` reads at most 1 MiB and
+  gives up after 2 s, killing `wl-paste` either way. A larger or stalled
+  clipboard is refused with a message, and partial data is never used.
+- **Regexes never run in the shell.** Your pattern runs in a separate `qml`
+  process (the same V4 engine and `Tools.js`, so results are identical). It is
+  killed after 1.5 s, so a catastrophic pattern such as `(a+)+$` cannot freeze
+  the desktop shell. Everything else is linear-time and size-capped; see
+  `tests/perf.test.mjs`.
+- **UUIDs use only secure randomness.** Every byte comes from Python's
+  `secrets`. If the pool runs short, generation waits for more bytes. There
+  is no `Math.random()` fallback.
 - **No config changes.** DevKit never edits your files. The only thing it
   registers is a runtime Hyprland window rule (`hyprctl eval`), which matches
   only a Quickshell window titled `DevKit`.
-- **Secrets stay out of argv.** Text sent for hashing, or to the clipboard, goes
-  over stdin, never on a command line where `/proc/<pid>/cmdline` would expose it.
+- **Secrets stay out of argv.** Text sent for hashing, to the clipboard, or to
+  the regex worker goes over stdin, never on a command line where
+  `/proc/<pid>/cmdline` would expose it. The worker gets the regex request in
+  a file inside a fresh owner-only (`0700`) directory under `$XDG_RUNTIME_DIR`,
+  which is deleted as soon as it finishes.
 - **Clipboard hygiene.** Every copy uses `wl-copy --sensitive`.
 - **No rich-text injection.** Every label renders as plain text, so markup in a
   pasted value (for example `<img src="file:///…">` in a JWT claim) shows up as
@@ -174,12 +189,19 @@ from `~/.config/hypr/bindings.lua` yourself.
 - **JWT signatures are not verified.** That needs the signing key, and the
   decoder says so on screen.
 
-Processes DevKit runs: `wl-paste`, `wl-copy`, `bin/devkit-hash` (Python) and
-`bin/devkit-window` (`hyprctl`, `jq`). All tool logic is plain JavaScript in
-`Tools.js`.
+Processes DevKit runs: `bin/devkit-clip` (which runs `wl-paste`), `wl-copy`,
+`bin/devkit-hash`, `bin/devkit-regex` (which runs `qml` with
+`bin/devkit-regex-worker.qml`), and `bin/devkit-window` (`hyprctl`, `jq`). All
+tool logic is plain JavaScript in `Tools.js`.
 
 ## Troubleshooting
 
+- **Regex says "possible false negative".** Qt's regex engine stops after a
+  fixed backtracking budget and reports "no match" instead of an error. When a
+  pattern with nested quantifiers (such as `(a+)+` or `(.*a){20}`) finds
+  nothing, DevKit says the result may be wrong. Simplify the pattern to confirm.
+- **Regex says "Stopped after 1.5 s".** The pattern was too slow on this text
+  and the worker was killed. Make the pattern more specific.
 - **The window opens tiled instead of floating.** The window rule needs
   Hyprland's Lua config. Check it with
   `hyprctl -j status | jq -r .configProvider`, which should print `lua`.
@@ -195,7 +217,7 @@ copy. Then:
 
 ```bash
 omarchy plugin enable coding-sparrow.devkit
-tests/run                    # manifest, helpers and all tool logic (needs node)
+tests/run                    # tool logic, worst-case timing, and helpers (needs node)
 omarchy restart shell        # load QML edits
 ```
 

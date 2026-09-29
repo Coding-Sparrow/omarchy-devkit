@@ -1,0 +1,171 @@
+#!/usr/bin/env python3
+"""Run a user-supplied regex off the shell's UI thread, under a hard deadline.
+
+JavaScript regexes backtrack, so a pattern like (a+)+$ can take exponential
+time on a short string. Running that inside omarchy-shell would freeze the
+whole desktop shell. Instead, this wrapper starts bin/devkit-regex-worker.qml
+in a separate `qml` process (the same V4 engine and Tools.js the shell uses,
+so results are identical), and kills its whole process group if it has not
+answered within DEADLINE_S.
+
+    devkit-regex < {"pattern":…,"flags":…,"input":…,"replacement":…,"useReplace":…}
+                 -> {"output":…,"error":…,"info":…[,"timeout":true]}
+
+The request is read from stdin and handed to the worker in a file inside a
+fresh owner-only (0700) directory under $XDG_RUNTIME_DIR, removed as soon as
+the worker finishes. Only that path is on the worker's command line, never
+the test text, which may be sensitive. Input and output are both
+size-bounded. Always prints one JSON object.
+"""
+
+import json
+import os
+import select
+import shutil
+import shutil as _shutil
+import signal
+import subprocess
+import sys
+import tempfile
+import time
+
+DEADLINE_S = 1.5
+MAX_REQUEST_BYTES = 2 * 1024 * 1024
+MAX_WORKER_OUTPUT_BYTES = 32 * 1024 * 1024
+MARKER = b"DEVKIT_RESULT "
+HERE = os.path.dirname(os.path.realpath(__file__))
+WORKER = os.path.join(HERE, "devkit-regex-worker.qml")
+
+child = None
+
+
+def emit(obj):
+    sys.stdout.write(json.dumps(obj) + "\n")
+    sys.stdout.flush()
+
+
+def fail(message, **extra):
+    emit({"output": "", "error": message, "info": "", **extra})
+    return 0
+
+
+def kill_group(proc):
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        pass
+    try:
+        proc.wait(timeout=1)
+    except subprocess.TimeoutExpired:
+        pass
+
+
+def on_signal(signum, _frame):
+    # If the shell stops us, never leave a spinning worker behind.
+    if child is not None:
+        kill_group(child)
+    sys.exit(128 + signum)
+
+
+def qml_binary():
+    for candidate in ("/usr/lib/qt6/bin/qml", shutil.which("qml6"), shutil.which("qml")):
+        if candidate and os.access(candidate, os.X_OK):
+            return candidate
+    return None
+
+
+def main():
+    global child
+    signal.signal(signal.SIGTERM, on_signal)
+    signal.signal(signal.SIGHUP, on_signal)
+
+    request = sys.stdin.buffer.read(MAX_REQUEST_BYTES + 1)
+    if len(request) > MAX_REQUEST_BYTES:
+        return fail("Regex request is too large")
+    try:
+        json.loads(request)
+    except ValueError:
+        return fail("Invalid regex request")
+
+    qml = qml_binary()
+    if not qml:
+        return fail("Qt's qml runtime (qt6-declarative) was not found")
+
+    base = os.environ.get("XDG_RUNTIME_DIR")
+    if not base or not os.path.isdir(base):
+        base = None
+    workdir = tempfile.mkdtemp(prefix="devkit-regex-", dir=base)  # mode 0700
+    try:
+        request_path = os.path.join(workdir, "request.json")
+        fd = os.open(request_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(request)
+        return run_worker(qml, request_path)
+    finally:
+        _shutil.rmtree(workdir, ignore_errors=True)
+
+
+def run_worker(qml, request_path):
+    global child
+    env = {
+        "PATH": "/usr/bin:/bin",
+        "LANG": "C.UTF-8",
+        "QT_FORCE_STDERR_LOGGING": "1",
+        "QT_MESSAGE_PATTERN": "%{message}",
+        "QML_XHR_ALLOW_FILE_READ": "1",
+        "QT_QPA_PLATFORM": "offscreen",
+    }
+    try:
+        child = subprocess.Popen(
+            [qml, "-a", "core", WORKER, "--", request_path],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            env=env,
+            start_new_session=True,
+        )
+    except OSError as error:
+        return fail("Could not start the regex worker: " + str(error))
+
+    fd = child.stderr.fileno()
+    os.set_blocking(fd, False)
+    output = bytearray()
+    deadline = time.monotonic() + DEADLINE_S
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            kill_group(child)
+            return fail("Stopped after %.1f s: this pattern is too slow on this text "
+                        "(likely catastrophic backtracking)" % DEADLINE_S, timeout=True)
+        ready, _, _ = select.select([fd], [], [], remaining)
+        if not ready:
+            continue
+        try:
+            chunk = os.read(fd, 65536)
+        except BlockingIOError:
+            continue
+        if not chunk:
+            break
+        output += chunk
+        if len(output) > MAX_WORKER_OUTPUT_BYTES:
+            kill_group(child)
+            return fail("Regex result is too large")
+
+    kill_group(child)
+    for line in bytes(output).splitlines():
+        if line.startswith(MARKER):
+            try:
+                result = json.loads(line[len(MARKER):])
+            except ValueError:
+                break
+            emit({
+                "output": str(result.get("output", "")),
+                "error": str(result.get("error", "")),
+                "info": str(result.get("info", "")),
+            })
+            return 0
+    return fail("The regex worker returned no result")
+
+
+if __name__ == "__main__":
+    sys.exit(main())

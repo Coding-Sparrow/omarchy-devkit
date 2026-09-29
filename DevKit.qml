@@ -57,8 +57,17 @@ Item {
   property string clipTool: ""
   property string toast: ""
 
-  // ---- CSPRNG pool for UUIDs (filled from python's `secrets`)
+  // ---- CSPRNG pool for UUIDs, filled only from python's `secrets`
+  // (bin/devkit-hash random). There is no other randomness source: when the
+  // pool is short, generation waits for the helper instead of falling back.
   property var randomPool: []
+  property int randomWanted: 0         // bytes a pending UUID request needs
+  property bool randomFailed: false
+  readonly property int randomPoolTarget: 8192
+  readonly property int randomRequestMax: 65536
+
+  // ---- regex worker state (see bin/devkit-regex)
+  property bool regexBusy: false
 
   // ------------------------------------------------------------ lifecycle
 
@@ -79,12 +88,13 @@ Item {
     if (payload.mode) mode = String(payload.mode)
     if (payload.input !== undefined) inputEd.text = String(payload.input)
     if (payload.input2 !== undefined) input2Ed.text = String(payload.input2)
+    if (payload.count !== undefined) countField.text = String(Tools.uuidCount(payload.count))
     if (payload.pattern !== undefined) patternField.text = String(payload.pattern)
     if (payload.flags !== undefined) flagsField.text = String(payload.flags)
     if (payload.replacement !== undefined) { replField.text = String(payload.replacement); useReplace = true }
     if (payload.tool || payload.mode) compute()
     readClipboard(payload.action === "clipboard" ? "load" : "hint")
-    if (randomPool.length < 256) refillRandom()
+    if (randomPool.length < randomPoolTarget) requestRandom(randomPoolTarget)
     Qt.callLater(focusInput)
   }
 
@@ -153,35 +163,86 @@ Item {
     }
   }
 
-  function nextByte() {
-    if (randomPool.length === 0) {
-      refillRandom()
-      return Math.floor(Math.random() * 256)
+  // Take exactly n CSPRNG bytes from the pool, or null if it holds fewer.
+  function takeRandom(n) {
+    if (randomPool.length < n) return null
+    var taken = randomPool.slice(0, n)
+    randomPool = randomPool.slice(n)
+    if (randomPool.length < randomPoolTarget) requestRandom(randomPoolTarget)
+    return taken
+  }
+
+  function requestRandom(bytes) {
+    if (randomProc.running) return
+    randomProc.bytes = Math.max(1, Math.min(randomRequestMax, bytes))
+    randomProc.running = true
+  }
+
+  function computeUuid() {
+    diffRows = []
+    outPairs = []
+    infoUrgent = false
+    var need = Tools.uuidBytesNeeded(countField.text)
+    var bytes = takeRandom(need)
+    if (!bytes) {
+      // Defer until the helper delivers enough secure bytes.
+      randomWanted = need
+      outText = ""
+      errText = randomFailed ? "Secure random source (bin/devkit-hash) is unavailable" : ""
+      infoText = randomFailed ? "" : "Generating…"
+      requestRandom(Math.max(need, randomPoolTarget))
+      return
     }
-    var b = randomPool.pop()
-    if (randomPool.length < 256) refillRandom()
-    return b
+    randomWanted = 0
+    applyResult(Tools.run("uuid", { mode: mode, count: countField.text, upper: upper,
+                                    nowMs: Date.now(), randomBytes: bytes }))
   }
 
-  function refillRandom() {
-    if (!randomProc.running) randomProc.running = true
-  }
-
-  function compute() {
-    if (toolId === "hash") { computeHash(); return }
-    var r = Tools.run(toolId, {
-      input: inputEd.text, input2: input2Ed.text, mode: mode,
-      pattern: patternField.text, flags: flagsField.text,
-      replacement: replField.text, useReplace: useReplace,
-      count: countField.text, upper: upper,
-      nowMs: Date.now(), rng: nextByte
-    })
+  function applyResult(r) {
     outText = r.output
     errText = r.error
     infoText = r.info
     infoUrgent = r.urgent === true
     outPairs = r.pairs || []
     diffRows = r.rows || []
+  }
+
+  function compute() {
+    if (toolId === "hash") { computeHash(); return }
+    if (toolId === "uuid") { computeUuid(); return }
+    if (toolId === "regex") { computeRegex(); return }
+    applyResult(Tools.run(toolId, {
+      input: inputEd.text, input2: input2Ed.text, mode: mode,
+      nowMs: Date.now()
+    }))
+  }
+
+  // User regexes never run in the shell: they go to a separate, killable
+  // worker process with a deadline. One request in flight at a time; edits
+  // made meanwhile are sent when it returns.
+  function computeRegex() {
+    diffRows = []
+    outPairs = []
+    infoUrgent = false
+    if (patternField.text === "") {
+      outText = ""; errText = ""; infoText = "Enter a pattern"
+      return
+    }
+    regexDebounce.restart()
+  }
+
+  function sendRegex() {
+    if (toolId !== "regex") return
+    if (regexProc.running) { regexProc.rerun = true; return }
+    regexProc.payload = JSON.stringify({
+      pattern: patternField.text, flags: flagsField.text, input: inputEd.text,
+      replacement: replField.text, useReplace: useReplace
+    })
+    regexBusy = true
+    infoText = "Matching…"
+    regexProc.stdinEnabled = true
+    regexProc.running = true
+    regexWatchdog.restart()
   }
 
   function computeHash() {
@@ -210,17 +271,44 @@ Item {
     flash("Copied " + (label || "output"))
   }
 
-  function flash(message) {
+  function flash(message, ms) {
     toast = message
+    toastTimer.interval = ms || 1600
     toastTimer.restart()
   }
 
+  // Clipboard reads go through bin/devkit-clip, which caps them at 1 MiB and
+  // 2 s and prints a status line first, so partial data is never used.
   function readClipboard(intent) {
+    if (clipProc.running) return
     clipProc.intent = intent
-    if (!clipProc.running) clipProc.running = true
+    clipProc.running = true
+    clipWatchdog.restart()
+  }
+
+  function handleClipboardOutput(raw, intent) {
+    var nl = raw.indexOf("\n")
+    var status = nl === -1 ? raw : raw.slice(0, nl)
+    var text = nl === -1 ? "" : raw.slice(nl + 1)
+    if (status !== "ok") {
+      clipTool = ""
+      clipText = ""
+      if (intent === "hint") return
+      flash(status === "too-large" ? "Clipboard is larger than 1 MiB, not loaded"
+        : status === "timeout" ? "Clipboard owner did not respond, not loaded"
+        : status === "empty" ? "Clipboard has no text"
+        : "Clipboard is unavailable", 4000)
+      return
+    }
+    handleClipboard(text, intent)
   }
 
   function handleClipboard(text, intent) {
+    if (intent === "paste2") {
+      input2Ed.text = text
+      input2Ed.area.forceActiveFocus()
+      return
+    }
     if (intent === "paste") {
       inputEd.text = text
       inputEd.area.forceActiveFocus()
@@ -278,11 +366,66 @@ Item {
   Process {
     id: clipProc
     property string intent: "hint"
-    command: ["wl-paste", "--no-newline", "--type", "text"]
+    command: [root.pluginDir + "/bin/devkit-clip"]
     stdout: StdioCollector {
       waitForEnd: true
-      onStreamFinished: root.handleClipboard(String(text || ""), clipProc.intent)
+      onStreamFinished: root.handleClipboardOutput(String(text || ""), clipProc.intent)
     }
+    onExited: clipWatchdog.stop()
+  }
+
+  // Belt and braces: devkit-clip enforces its own 2 s deadline.
+  Timer {
+    id: clipWatchdog
+    interval: 5000
+    onTriggered: if (clipProc.running) clipProc.running = false
+  }
+
+  Timer {
+    id: regexDebounce
+    interval: 200
+    onTriggered: root.sendRegex()
+  }
+
+  Process {
+    id: regexProc
+    property string payload: ""
+    property bool rerun: false
+    command: [root.pluginDir + "/bin/devkit-regex"]
+    stdinEnabled: true
+    onStarted: {
+      write(payload)
+      payload = ""
+      stdinEnabled = false
+    }
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        if (regexProc.rerun || root.toolId !== "regex") return
+        var lines = String(text || "").split("\n").filter(function (l) { return l.trim() })
+        try {
+          var r = JSON.parse(lines[lines.length - 1])
+          root.applyResult({ output: String(r.output || ""), error: String(r.error || ""),
+                             info: String(r.info || ""), urgent: r.timeout === true })
+        } catch (e) {
+          root.applyResult({ output: "", error: "The regex worker returned no result", info: "" })
+        }
+      }
+    }
+    onExited: {
+      regexWatchdog.stop()
+      root.regexBusy = false
+      if (!rerun) return
+      rerun = false
+      root.sendRegex()
+    }
+  }
+
+  // Belt and braces: devkit-regex kills its worker after 1.5 s.
+  Timer {
+    id: regexWatchdog
+    interval: 5000
+    onTriggered: if (regexProc.running) regexProc.running = false
   }
 
   // Secrets go through stdin, never argv; --sensitive keeps them out of
@@ -345,16 +488,29 @@ Item {
 
   Process {
     id: randomProc
-    command: [root.pluginDir + "/bin/devkit-hash", "random", "4096"]
+    property int bytes: 8192
+    command: [root.pluginDir + "/bin/devkit-hash", "random", String(bytes)]
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
         try {
           var hex = JSON.parse(String(text || "").trim().split("\n").pop()).random || ""
+          if (!/^(?:[0-9a-f]{2})+$/.test(hex)) throw "bad"
           var pool = []
-          for (var i = 0; i + 1 < hex.length; i += 2) pool.push(parseInt(hex.substr(i, 2), 16))
-          root.randomPool = pool.concat(root.randomPool)
-        } catch (e) {}
+          for (var i = 0; i < hex.length; i += 2) pool.push(parseInt(hex.substr(i, 2), 16))
+          root.randomPool = root.randomPool.concat(pool)
+          root.randomFailed = false
+        } catch (e) {
+          root.randomFailed = true
+        }
+      }
+    }
+    onExited: function (exitCode) {
+      if (exitCode !== 0) root.randomFailed = true
+      if (root.randomWanted > 0 && root.toolId === "uuid") {
+        if (root.randomPool.length >= root.randomWanted) root.computeUuid()
+        else if (!root.randomFailed) root.requestRandom(root.randomWanted)
+        else root.computeUuid()
       }
     }
   }
@@ -370,7 +526,7 @@ Item {
   }
 
   Component.onCompleted: {
-    refillRandom()
+    requestRandom(randomPoolTarget)
     windowRuleProc.running = true
     selectTool("json")
   }
@@ -482,6 +638,9 @@ Item {
             }
             Item { Layout.fillWidth: true }
             PlainText {
+              Layout.maximumWidth: Math.max(Style.space(120), parent.width * 0.5)
+              elide: Text.ElideRight
+              horizontalAlignment: Text.AlignRight
               text: root.toast || root.infoText
               color: root.toast ? root.accent : (root.infoUrgent ? root.urgent : root.dim)
               font.pixelSize: Style.font.bodySmall
@@ -648,7 +807,7 @@ Item {
                 onTextChanged: root.compute()
               }
               actions: [
-                Button { text: "Paste"; foreground: root.dim; onClicked: root.readClipboardInto2() },
+                Button { text: "Paste"; foreground: root.dim; onClicked: root.readClipboard("paste2") },
                 Button { text: "Swap"; foreground: root.dim; onClicked: { var a = inputEd.text; inputEd.text = input2Ed.text; input2Ed.text = a } }
               ]
             }
@@ -730,19 +889,6 @@ Item {
           }
         }
       }
-    }
-  }
-
-  function readClipboardInto2() {
-    clipProc2.running = true
-  }
-
-  Process {
-    id: clipProc2
-    command: ["wl-paste", "--no-newline", "--type", "text"]
-    stdout: StdioCollector {
-      waitForEnd: true
-      onStreamFinished: { input2Ed.text = String(text || ""); input2Ed.area.forceActiveFocus() }
     }
   }
 

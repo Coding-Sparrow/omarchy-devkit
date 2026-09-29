@@ -1,0 +1,94 @@
+#!/usr/bin/env python3
+"""Read the clipboard as text, with a hard size limit and a hard deadline.
+
+The clipboard owner controls what wl-paste streams, and it can stream
+without end. This helper bounds it before anything reaches the shell:
+it reads at most LIMIT_BYTES + 1 bytes and gives up after DEADLINE_S
+seconds, killing wl-paste in both cases.
+
+Output is one status line, then the text only when the status is "ok":
+
+    ok\\n<clipboard text>
+    empty\\n            nothing on the clipboard, or no text type offered
+    too-large\\n        more than LIMIT_BYTES
+    timeout\\n          the owner did not finish within DEADLINE_S
+    unavailable\\n      wl-paste could not be started
+"""
+
+import os
+import select
+import signal
+import subprocess
+import sys
+import time
+
+LIMIT_BYTES = 1 << 20  # 1 MiB
+DEADLINE_S = 2.0
+
+
+def kill_group(proc):
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        pass
+    proc.wait()
+
+
+def read_clipboard():
+    try:
+        proc = subprocess.Popen(
+            ["wl-paste", "--no-newline", "--type", "text"],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+    except OSError:
+        return "unavailable", b""
+
+    fd = proc.stdout.fileno()
+    os.set_blocking(fd, False)
+    data = bytearray()
+    deadline = time.monotonic() + DEADLINE_S
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            kill_group(proc)
+            return "timeout", b""
+        ready, _, _ = select.select([fd], [], [], remaining)
+        if not ready:
+            kill_group(proc)
+            return "timeout", b""
+        try:
+            chunk = os.read(fd, 65536)
+        except BlockingIOError:
+            continue
+        if not chunk:
+            break
+        data += chunk
+        if len(data) > LIMIT_BYTES:
+            kill_group(proc)
+            return "too-large", b""
+
+    try:
+        code = proc.wait(timeout=max(0.05, deadline - time.monotonic()))
+    except subprocess.TimeoutExpired:
+        kill_group(proc)
+        return "timeout", b""
+    if code != 0 or not data:
+        return "empty", b""
+    return "ok", bytes(data)
+
+
+def main():
+    status, data = read_clipboard()
+    out = sys.stdout.buffer
+    out.write(status.encode() + b"\n")
+    if status == "ok":
+        out.write(data)
+    out.flush()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

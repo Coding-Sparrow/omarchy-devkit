@@ -69,16 +69,27 @@ assert.match(run("time", { input: "2024-01-01T11:00:00Z" }).output, /Relative {6
 assert.equal(run("time", { input: "" }).info, "Read as now")
 assert.match(run("time", { input: "not a date" }).error, /Could not read/)
 
-// UUID
-let seed = 1
-const rng = () => (seed = (seed * 1103515245 + 12345) % 2147483648) & 255
-const v4 = run("uuid", { mode: "v4", count: 3, rng }).output.split("\n")
+// UUID: only ever built from supplied CSPRNG bytes
+const secure = (n) => [...crypto.getRandomValues(new Uint8Array(n))]
+const v4 = run("uuid", { mode: "v4", count: 3, randomBytes: secure(48) }).output.split("\n")
 assert.equal(v4.length, 3)
 for (const id of v4) assert.match(id, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/)
-const v7 = run("uuid", { mode: "v7", count: 1, rng }).output
+assert.equal(new Set(v4).size, 3)
+const v7 = run("uuid", { mode: "v7", count: 1, randomBytes: secure(16) }).output
 assert.match(v7, /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/)
 assert.equal(parseInt(v7.replace(/-/g, "").slice(0, 12), 16), NOW)
-assert.equal(run("uuid", { mode: "v4", count: 9999, rng }).output.split("\n").length, 500)
+// Known bytes -> known UUID, so no other randomness source can be involved.
+assert.equal(run("uuid", { mode: "v4", count: 1, randomBytes: Array(16).fill(0xff) }).output, "ffffffff-ffff-4fff-bfff-ffffffffffff")
+// Not enough secure bytes: refuse, never fall back.
+const short = run("uuid", { mode: "v4", count: 2, randomBytes: secure(31) })
+assert.equal(short.output, "")
+assert.match(short.error, /secure random bytes/)
+assert.equal(run("uuid", { mode: "v4", count: 1 }).output, "")
+assert.match(run("uuid", { mode: "v4", count: 1, randomBytes: [...Array(15).fill(1), 256] }).error, /Invalid random bytes/)
+assert.equal(T.uuidBytesNeeded(9999), 500 * 16)
+assert.equal(run("uuid", { mode: "v4", count: 9999, randomBytes: secure(8000) }).output.split("\n").length, 500)
+assert.doesNotMatch(fs.readFileSync(path.join(dir, "..", "Tools.js"), "utf8").replace(/\/\/.*$/gm, ""), /Math\.random/)
+assert.doesNotMatch(fs.readFileSync(path.join(dir, "..", "DevKit.qml"), "utf8").replace(/\/\/.*$/gm, ""), /Math\.random/)
 
 // Case
 const c = run("case", { input: "parseHTTPResponse_code-v2" }).output
@@ -86,6 +97,9 @@ assert.match(c, /camelCase {8}parseHttpResponseCodeV2/)
 assert.match(c, /snake_case {7}parse_http_response_code_v2/)
 assert.match(c, /SCREAMING_SNAKE {2}PARSE_HTTP_RESPONSE_CODE_V2/)
 assert.match(c, /kebab-case {7}parse-http-response-code-v2/)
+
+assert.match(run("case", { input: "HTTPResponse" }).output, /PascalCase {7}HttpResponse/)
+assert.match(run("case", { input: "a".repeat(10001) }).error, /10000 characters max/)
 
 // Regex
 const r = run("regex", { pattern: "(?<user>\\w+)@(\\w+)\\.com", flags: "g", input: "a@b.com\nc@d.com" })

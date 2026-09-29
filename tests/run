@@ -4,8 +4,12 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
 jq -e '.id == "coding-sparrow.devkit" and (.kinds | index("panel")) and (.kinds | index("bar-widget"))' manifest.json >/dev/null
 bash -n bin/devkit-window
-python3 -m py_compile bin/devkit-hash
+for helper in bin/devkit-hash bin/devkit-clip bin/devkit-regex; do
+  python3 -m py_compile "$helper"
+done
+rm -rf bin/__pycache__
 [[ $(printf hello | bin/devkit-hash | jq -r .sha256) == "$(printf hello | sha256sum | cut -d' ' -f1)" ]]
-[[ $(bin/devkit-hash random 16 | jq -r '.random | length') == 32 ]]
 node tests/tools.test.mjs
+node tests/perf.test.mjs
+python3 tests/helpers.test.py
 echo "all tests passed"

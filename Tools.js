@@ -199,10 +199,21 @@ function jsonErrorLocation(text) {
     }
     fail("Unterminated string")
   }
+  function digits() {
+    var start = i
+    while (i < text.length && text[i] >= "0" && text[i] <= "9") i++
+    return i - start
+  }
   function number() {
-    var m = /^-?(0|[1-9]\d*)(\.\d+)?([eE][+-]?\d+)?/.exec(text.slice(i))
-    if (!m) fail("Invalid number")
-    i += m[0].length
+    if (text[i] === "-") i++
+    if (text[i] === "0") i++
+    else if (digits() === 0) fail("Invalid number")
+    if (text[i] === ".") { i++; if (digits() === 0) fail("Invalid number") }
+    if (text[i] === "e" || text[i] === "E") {
+      i++
+      if (text[i] === "+" || text[i] === "-") i++
+      if (digits() === 0) fail("Invalid number")
+    }
   }
   try {
     value(); ws()
@@ -392,10 +403,10 @@ function hexBytes(bytes) {
   return h.slice(0, 8) + "-" + h.slice(8, 12) + "-" + h.slice(12, 16) + "-" + h.slice(16, 20) + "-" + h.slice(20)
 }
 
-// rng() returns an integer 0..255. Pass a real CSPRNG source when you have one.
-function uuid(version, nowMs, rng) {
-  var b = []
-  for (var i = 0; i < 16; i++) b.push(rng())
+// `random` is exactly 16 bytes (0..255) from a CSPRNG. There is deliberately
+// no Math.random() path: callers must supply secure bytes or get an error.
+function uuid(version, nowMs, random) {
+  var b = random.slice(0, 16)
   if (version === "v7") {
     var ms = Math.floor(nowMs)
     for (var j = 5; j >= 0; j--) { b[j] = ms % 256; ms = Math.floor(ms / 256) }
@@ -407,20 +418,41 @@ function uuid(version, nowMs, rng) {
   return hexBytes(b)
 }
 
-function uuidTool(mode, count, nowMs, rng, upper) {
-  var n = Math.max(1, Math.min(500, Math.floor(Number(count) || 1)))
+var UUID_MAX = 500
+
+function uuidCount(count) {
+  return Math.max(1, Math.min(UUID_MAX, Math.floor(Number(count) || 1)))
+}
+
+// Bytes of CSPRNG output needed for `count` UUIDs.
+function uuidBytesNeeded(count) {
+  return uuidCount(count) * 16
+}
+
+function uuidTool(mode, count, nowMs, randomBytes, upper) {
+  var n = uuidCount(count)
+  var bytes = randomBytes || []
+  if (bytes.length < n * 16) return result("", "Waiting for secure random bytes…")
+  for (var k = 0; k < n * 16; k++) {
+    if (typeof bytes[k] !== "number" || bytes[k] < 0 || bytes[k] > 255 || bytes[k] !== Math.floor(bytes[k]))
+      return result("", "Invalid random bytes")
+  }
   var out = []
-  for (var i = 0; i < n; i++) out.push(uuid(mode, nowMs, rng))
+  for (var i = 0; i < n; i++) out.push(uuid(mode, nowMs, bytes.slice(i * 16, i * 16 + 16)))
   var text = out.join("\n")
   return result(upper ? text.toUpperCase() : text, "", n + " × UUID " + (mode === "v7" ? "v7" : "v4"))
 }
 
 // ---------------------------------------------------------------- Case
 
+var CASE_MAX = 10000
+
+// Every pattern here is linear: no quantified group is followed by an
+// overlapping one, so pasted input cannot trigger backtracking blowups.
 function splitWords(input) {
   return String(input)
     .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
-    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2")
+    .replace(/([A-Z])(?=[A-Z][a-z])/g, "$1 ")
     .split(/[^A-Za-z0-9]+/)
     .filter(function (w) { return w.length > 0 })
     .map(function (w) { return w.toLowerCase() })
@@ -449,6 +481,7 @@ function caseVariants(input) {
 
 function caseTool(input) {
   if (input.trim() === "") return result()
+  if (input.length > CASE_MAX) return result("", "Case conversion is for identifiers and short text (" + CASE_MAX + " characters max)")
   var v = caseVariants(input)
   if (!v.length) return result("", "No words found")
   return withPairs(v, "")
@@ -476,6 +509,29 @@ function groupNames(pattern) {
   return names.slice(1)
 }
 
+// A quantified group that itself contains a quantifier, e.g. (a+)+ or (.*a){20}.
+// Such patterns can exhaust the engine's backtracking budget. Qt's V4 engine
+// then reports "no match" instead of an error, so we warn about it. Linear:
+// one pass over the (short) pattern.
+function hasNestedQuantifier(pattern) {
+  var stack = [], inClass = false
+  for (var i = 0; i < pattern.length; i++) {
+    var ch = pattern[i]
+    if (ch === "\\") { i++; continue }
+    if (inClass) { if (ch === "]") inClass = false; continue }
+    if (ch === "[") { inClass = true; continue }
+    if (ch === "(") { stack.push(false); continue }
+    if ((ch === "*" || ch === "+" || ch === "{") && stack.length) stack[stack.length - 1] = true
+    if (ch === ")" && stack.length) {
+      var innerQuantified = stack.pop()
+      var next = pattern[i + 1]
+      if (innerQuantified && (next === "*" || next === "+" || next === "{")) return true
+      if (innerQuantified && stack.length) stack[stack.length - 1] = true
+    }
+  }
+  return false
+}
+
 // Rewrite $<name> to $N so named replacements work on every engine.
 function expandNamedReplacement(replacement, names) {
   return replacement.replace(/\$\$|\$<([^>]*)>/g, function (all, name) {
@@ -485,9 +541,14 @@ function expandNamedReplacement(replacement, names) {
   })
 }
 
+// Runs user-supplied patterns, so it can backtrack catastrophically. The shell
+// never calls this directly: bin/devkit-regex runs it in a separate `qml`
+// process under a hard deadline and kills it on timeout.
+var REGEX_MAX = 200000
+
 function regexTool(pattern, flags, text, replacement, useReplace) {
   if (pattern === "") return result("", "", "Enter a pattern")
-  if (text.length > 200000) return result("", "Text too large for live matching (200k chars max)")
+  if (text.length > REGEX_MAX) return result("", "Text too large for live matching (" + REGEX_MAX + " characters max)")
   var re
   try { re = new RegExp(pattern, flags.replace(/g/g, "") + "g") } catch (e) { return result("", String(e.message || e)) }
   if (useReplace) {
@@ -515,6 +576,8 @@ function regexTool(pattern, flags, text, replacement, useReplace) {
     if (flags.indexOf("g") === -1) break
   }
   if (count > 200) lines.push("… " + (count - 200) + " more")
+  if (count === 0 && hasNestedQuantifier(pattern))
+    return result("", "", "No matches (possible false negative: engine backtracking limit)")
   return result(lines.join("\n"), "", count === 0 ? "No matches" : count + (count === 1 ? " match" : " matches"))
 }
 
@@ -563,16 +626,18 @@ function diffTool(a, b) {
 // ---------------------------------------------------------------- Detect
 
 // Best guess at which tool the clipboard content belongs to, or "".
+var DETECT_MAX = 1048576
+
 function detect(text) {
   var s = String(text || "").trim()
-  if (s === "" || s.length > 1000000) return ""
+  if (s === "" || s.length > DETECT_MAX) return ""
   if (/^(Bearer\s+)?eyJ[A-Za-z0-9_-]*\.eyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]*$/.test(s)) return "jwt"
   if (/^[\[{]/.test(s)) { try { JSON.parse(s); return "json" } catch (e) { if (/^\{\s*"/.test(s)) return "json" } }
   if (/^\d{10}(\d{3})?$/.test(s)) return "time"
   if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(s)) return "time"
   if (/^https?:\/\/\S+$/.test(s)) return "url"
   if (/%[0-9A-Fa-f]{2}/.test(s) && !/\s/.test(s)) return "url"
-  if (s.length >= 8 && s.length % 4 !== 1 && /^[A-Za-z0-9+/_-]+={0,2}$/.test(s) && /[0-9+/=_-]|[A-Z].*[a-z]/.test(s)) {
+  if (s.length >= 8 && s.length % 4 !== 1 && /^[A-Za-z0-9+/_-]+={0,2}$/.test(s) && (/[0-9+/=_-]/.test(s) || (/[A-Z]/.test(s) && /[a-z]/.test(s)))) {
     var bytes = bytesFromBase64(s)
     var t = bytes && utf8Decode(bytes)
     if (t && isPrintable(t) && /[A-Za-z]{2}/.test(t)) return "base64"
@@ -583,7 +648,7 @@ function detect(text) {
 // ---------------------------------------------------------------- Dispatch
 
 // state: { input, input2, mode, pattern, flags, replacement, useReplace,
-//          count, upper, nowMs, rng }
+//          count, upper, nowMs, randomBytes }
 function run(toolId, state) {
   var input = String(state.input || "")
   switch (toolId) {
@@ -592,7 +657,7 @@ function run(toolId, state) {
   case "base64": return base64Tool(input, state.mode || "encode")
   case "url": return urlTool(input, state.mode || "encode")
   case "time": return timeTool(input, state.nowMs)
-  case "uuid": return uuidTool(state.mode || "v4", state.count, state.nowMs, state.rng, state.upper)
+  case "uuid": return uuidTool(state.mode || "v4", state.count, state.nowMs, state.randomBytes, state.upper)
   case "case": return caseTool(input)
   case "regex": return regexTool(String(state.pattern || ""), String(state.flags || ""), input, String(state.replacement || ""), !!state.useReplace)
   case "diff": return diffTool(input, String(state.input2 || ""))
