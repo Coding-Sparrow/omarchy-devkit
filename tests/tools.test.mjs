@@ -91,7 +91,7 @@ assert.match(c, /kebab-case {7}parse-http-response-code-v2/)
 const r = run("regex", { pattern: "(?<user>\\w+)@(\\w+)\\.com", flags: "g", input: "a@b.com\nc@d.com" })
 assert.equal(r.info, "2 matches")
 assert.match(r.output, /#2 {2}line 2, index 8 {2}"c@d.com"/)
-assert.match(r.output, /<user> = "c"/)
+assert.match(r.output, /\$1 <user> = "c"/)
 assert.equal(run("regex", { pattern: "x*", flags: "g", input: "abc" }).info, "4 matches") // zero-width safe
 assert.equal(run("regex", { pattern: "o", flags: "", input: "foo" }).info, "1 match")
 assert.equal(run("regex", { pattern: "(\\w+)@", flags: "g", input: "a@ b@", replacement: "[$1]", useReplace: true }).output, "[a] [b]")
@@ -113,5 +113,32 @@ assert.equal(T.detect("a%20b"), "url")
 assert.equal(T.detect(Buffer.from("hello world, this is text").toString("base64")), "base64")
 assert.equal(T.detect("justaword"), "")
 assert.equal(T.detect("some plain sentence"), "")
+
+// Named groups on an engine without match.groups (Qt's V4, used by the shell).
+// Simulate it by stripping .groups from every exec() result.
+const V4 = {}
+vm.createContext(V4)
+vm.runInContext(`
+  (function () {
+    var NativeRegExp = RegExp
+    function V4RegExp(p, f) {
+      var re = new NativeRegExp(p, f)
+      var exec = re.exec
+      re.exec = function (s) { var m = exec.call(re, s); if (m) delete m.groups; return m }
+      return re
+    }
+    RegExp = V4RegExp
+  })()
+`, V4)
+vm.runInContext(fs.readFileSync(path.join(dir, "..", "Tools.js"), "utf8"), V4)
+const named = V4.run("regex", { pattern: "(?<kind>\\w+) id=(?<id>\\d+)", flags: "g", input: "order id=1042" })
+assert.match(named.output, /\$1 <kind> = "order"/)
+assert.match(named.output, /\$2 <id> = "1042"/)
+assert.deepEqual([...T.groupNames("(a)(?:b)(?<x>c)(?=d)\\(e\\)[(](?<y>f(g))(?<!h)")], ["", "x", "y", ""])
+// $<name> in replacements, on both engines
+for (const E of [T, V4]) {
+  assert.equal(E.run("regex", { pattern: "(?<user>\\w+)@(?<host>\\w+)", flags: "g", input: "a@b c@d",
+    replacement: "$<host>/$<user>", useReplace: true }).output, "b/a d/c")
+}
 
 console.log("tools.test.mjs: ok")

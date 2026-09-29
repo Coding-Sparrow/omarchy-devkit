@@ -456,6 +456,35 @@ function caseTool(input) {
 
 // ---------------------------------------------------------------- Regex
 
+// Names of capturing groups by index (1-based; "" for unnamed), read from
+// the pattern itself. Qt's V4 engine accepts (?<name>…) but does not fill
+// match.groups or expand $<name>, so we cannot rely on the engine for this.
+function groupNames(pattern) {
+  var names = [""]
+  var inClass = false
+  for (var i = 0; i < pattern.length; i++) {
+    var ch = pattern[i]
+    if (ch === "\\") { i++; continue }
+    if (inClass) { if (ch === "]") inClass = false; continue }
+    if (ch === "[") { inClass = true; continue }
+    if (ch !== "(") continue
+    if (pattern[i + 1] !== "?") { names.push(""); continue }
+    var named = /^\?<([A-Za-z_$][\w$]*)>/.exec(pattern.slice(i + 1))
+    if (named) names.push(named[1])
+    // Anything else after "(?" — (?: (?= (?! (?<= (?<! — does not capture.
+  }
+  return names.slice(1)
+}
+
+// Rewrite $<name> to $N so named replacements work on every engine.
+function expandNamedReplacement(replacement, names) {
+  return replacement.replace(/\$\$|\$<([^>]*)>/g, function (all, name) {
+    if (all === "$$") return all
+    var idx = names.indexOf(name)
+    return idx === -1 ? all : "$" + (idx + 1)
+  })
+}
+
 function regexTool(pattern, flags, text, replacement, useReplace) {
   if (pattern === "") return result("", "", "Enter a pattern")
   if (text.length > 200000) return result("", "Text too large for live matching (200k chars max)")
@@ -464,18 +493,22 @@ function regexTool(pattern, flags, text, replacement, useReplace) {
   if (useReplace) {
     var replaced
     try {
-      replaced = text.replace(flags.indexOf("g") !== -1 ? re : new RegExp(pattern, flags.replace(/g/g, "")), replacement)
+      replaced = text.replace(flags.indexOf("g") !== -1 ? re : new RegExp(pattern, flags.replace(/g/g, "")),
+        expandNamedReplacement(replacement, groupNames(pattern)))
     } catch (e2) { return result("", String(e2.message || e2)) }
     return result(replaced, "", "Replaced")
   }
   var lines = [], count = 0, m
+  var names = groupNames(pattern)
   while ((m = re.exec(text)) !== null) {
     count++
     if (count <= 200) {
       var lineNo = text.slice(0, m.index).split("\n").length
       lines.push("#" + count + "  line " + lineNo + ", index " + m.index + "  " + JSON.stringify(m[0]))
-      for (var g = 1; g < m.length; g++) lines.push("     $" + g + " = " + (m[g] === undefined ? "undefined" : JSON.stringify(m[g])))
-      if (m.groups) for (var name in m.groups) lines.push("     <" + name + "> = " + JSON.stringify(m.groups[name]))
+      for (var g = 1; g < m.length; g++) {
+        var label = names[g - 1] ? "$" + g + " <" + names[g - 1] + ">" : "$" + g
+        lines.push("     " + label + " = " + (m[g] === undefined ? "undefined" : JSON.stringify(m[g])))
+      }
     }
     if (m[0] === "") re.lastIndex++
     if (count >= 10000) break

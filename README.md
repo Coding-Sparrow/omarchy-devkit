@@ -21,7 +21,7 @@ secrets stay out of clipboard history.
 | `Ctrl+6` | **UUID** | v4 and v7, bulk, uppercase. Uses a CSPRNG (Python `secrets`) |
 | `Ctrl+7` | **Hash** | MD5, SHA-1, SHA-256, SHA-512 |
 | `Ctrl+8` | **Case Converter** | camel, Pascal, snake, SCREAMING, kebab, Train, dot, path, Title… |
-| `Ctrl+9` | **Regex Tester** | JS regex matches, numbered and named groups, replace |
+| `Ctrl+9` | **Regex Tester** | JS regex matches, numbered and named groups, replace with `$1` or `$<name>` |
 | `Ctrl+0` | **Text Diff** | Line diff of two texts |
 
 When you open DevKit, it checks the clipboard. If the content looks like a JWT,

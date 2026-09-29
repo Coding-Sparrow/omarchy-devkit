@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "coding-sparrow.devkit",
   "name": "DevKit",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "author": "Coding-Sparrow",
   "license": "MIT",
   "description": "Everyday developer tools in a floating window: JSON, JWT, Base64, URL, timestamps, UUIDs, hashes, case, regex and diff. Offline.",
