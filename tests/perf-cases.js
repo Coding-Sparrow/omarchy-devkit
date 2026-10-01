@@ -1,0 +1,56 @@
+// Worst-case inputs for every tool that runs on the shell's UI thread.
+// Plain ES so the same cases run in node (tests/perf.test.mjs) and in Qt's
+// V4 engine (tests/perf-v4.qml), which is what the shell actually uses.
+var PERF_N = 1 << 20
+
+function perfCases(T) {
+  var N = PERF_N
+  var MAX_PW_BYTES = Array.from({ length: 65536 }, (_, i) => i & 255)
+  return {
+    "detect: capitals": () => T.detect("A".repeat(N)),
+    "detect: capitals then symbol": () => T.detect("A".repeat(N - 1) + "!"),
+    "detect: base64-ish": () => T.detect("Ab".repeat(Math.floor(N / 2))),
+    "detect: jwt-ish": () => T.detect("eyJ" + "a".repeat(N) + ".eyJ" + "a".repeat(N)),
+    "detect: percent": () => T.detect("%".repeat(N)),
+    "case: capitals at the cap": () => T.run("case", { input: "A".repeat(10000) }),
+    "case: over the cap": () => T.run("case", { input: "A".repeat(N) }),
+    "case: mixed at the cap": () => T.run("case", { input: "aB".repeat(5000) }),
+    "url parse: long host": () => T.run("url", { mode: "parse", input: "http://" + "a".repeat(N) }),
+    "url parse: colons": () => T.run("url", { mode: "parse", input: "http://" + "a:".repeat(Math.floor(N / 2)) }),
+    "url parse: at signs": () => T.run("url", { mode: "parse", input: "http://" + "@".repeat(N) }),
+    "url parse: query": () => T.run("url", { mode: "parse", input: "a=b&".repeat(Math.floor(N / 4)) }),
+    "url decode": () => T.run("url", { mode: "decode", input: "%41".repeat(Math.floor(N / 3)) }),
+    "json: invalid numbers": () => T.run("json", { input: "[" + "1,".repeat(Math.floor(N / 2)) + "x" }),
+    "json: deep nesting": () => T.run("json", { input: "[".repeat(5000) + "]".repeat(4999) }),
+    "json: long string": () => T.run("json", { input: '"' + "a".repeat(N) }),
+    "base64 decode": () => T.run("base64", { mode: "decode", input: "QUJD".repeat(Math.floor(N / 4)) }),
+    "base64 encode": () => T.run("base64", { mode: "encode", input: "é".repeat(Math.floor(N / 2)) }),
+    "time: long digits": () => T.run("time", { input: "1".repeat(N) }),
+    "time: junk": () => T.run("time", { input: "x".repeat(N) }),
+    "jwt: junk": () => T.run("jwt", { input: "a.".repeat(Math.floor(N / 2)) }),
+    "diff: at the cell cap": () => T.run("diff", { input: "a\n".repeat(2000), input2: "b\n".repeat(2000) }),
+    "diff: over the cell cap": () => T.run("diff", { input: "a\n".repeat(Math.floor(N / 4)), input2: "b\n".repeat(Math.floor(N / 4)) }),
+    "cron: junk at the cap": () => T.run("cron", { input: "*,".repeat(499) + " * * * *", nowMs: 0 }),
+    "cron: over the cap": () => T.run("cron", { input: "* ".repeat(Math.floor(N / 2)), nowMs: 0 }),
+    "cron: never matches": () => T.run("cron", { input: "* * 31 2 *", nowMs: 0 }),
+    "cron: sparse match": () => T.run("cron", { input: "59 23 29 2 1", nowMs: 0 }),
+    "detect: cron-ish": () => T.detect("1 ".repeat(Math.floor(N / 2))),
+    "number: longest hex": () => T.run("number", { input: "0x" + "f".repeat(1024) }),
+    "number: longest binary": () => T.run("number", { input: "0b" + "1".repeat(1024) }),
+    "number: over the cap": () => T.run("number", { input: "9".repeat(N) }),
+    "color: junk": () => T.run("color", { input: "rgb(" + "1 ".repeat(Math.floor(N / 2)) + ")" }),
+    "escape: html decode": () => T.run("escape", { mode: "html-decode", input: "&amp;".repeat(Math.floor(N / 5)) }),
+    "escape: unescape": () => T.run("escape", { mode: "unescape", input: "\\u0041".repeat(Math.floor(N / 6)) }),
+    "escape: shell": () => T.run("escape", { mode: "shell", input: "'".repeat(N) }),
+    "lines: natural sort": () => T.run("lines", { mode: "sort", input: Array.from({ length: 100000 }, (_, i) => "item" + ((i * 7919) % 100000) + "x").join("\n") }),
+    "lines: count": () => T.run("lines", { mode: "count", input: Array.from({ length: 200000 }, (_, i) => "k" + (i % 5000)).join("\n") }),
+    "lines: over the cap": () => T.run("lines", { mode: "sort", input: "\n".repeat(N) }),
+    "json → yaml: wide": () => T.run("json", { mode: "yaml", input: JSON.stringify(Array.from({ length: 20000 }, (_, i) => ({ id: i, name: "n" + i, tags: ["a", "b"] }))) }),
+    "json → ts: wide": () => T.run("json", { mode: "ts", input: JSON.stringify(Array.from({ length: 20000 }, (_, i) => ({ ["k" + (i % 500)]: i, nested: { a: [i] } }))) }),
+    "json → ts: deep": () => T.run("json", { mode: "ts", input: "[".repeat(190) + "1" + "]".repeat(190) }),
+    "json → csv": () => T.run("json", { mode: "csv", input: JSON.stringify(Array.from({ length: 20000 }, (_, i) => ({ a: i, b: "x,y", c: { d: i } }))) }),
+    "csv → json: quotes": () => T.run("json", { mode: "from-csv", input: '"' + "a".repeat(N) }),
+    "csv → json: rows": () => T.run("json", { mode: "from-csv", input: "a,b,c\n" + "1,2,3\n".repeat(Math.floor(N / 8)) }),
+    "password: largest draw": () => T.run("password", { length: 128, count: 64, upper: true, lower: true, digits: true, special: true, randomBytes: MAX_PW_BYTES }),
+  }
+}

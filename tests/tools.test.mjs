@@ -277,4 +277,147 @@ T.CRON_PRESETS.forEach((p) => assert.equal(next(cron(p.expr)).length, 10, p.expr
 for (const s of ["*/5 * * * *", "0 9 * * MON-FRI", "@daily", "0 0 1 */3 *"]) assert.equal(T.detect(s), "cron", s)
 for (const s of ["1 2 3 4 5", "hello there my good friend"]) assert.equal(T.detect(s), "", s)
 
+// ---- shortcuts for the tools past Ctrl+0 are unique
+const keys = T.TOOLS.slice(10).map((t) => t.shortcut)
+assert.equal(new Set(keys).size, keys.length)
+for (const k of keys) assert.ok(!["Ctrl+Shift+C", "Ctrl+Shift+V", "Ctrl+Shift+Tab"].includes(k), k)
+
+// ---- Number base: exact at any size, two's complement, prefixes and modes
+const num = (input, mode) => run("number", { input, mode })
+const npair = (r, k) => (r.pairs.find((p) => p[0] === k) || [])[1]
+assert.equal(npair(num("0xff"), "Decimal"), "255")
+assert.equal(npair(num("255"), "Hex"), "0xFF")
+assert.equal(npair(num("0b1111_1111"), "Octal"), "0o377")
+assert.equal(npair(num("0o17"), "Decimal"), "15")
+assert.equal(npair(num("deadbeef"), "Decimal"), "3,735,928,559")
+assert.equal(npair(num("10", "bin"), "Decimal"), "2")
+assert.equal(npair(num("10", "hex"), "Decimal"), "16")
+assert.match(num("ff", "dec").error, /base-10/)
+const big = "f".repeat(64)
+assert.equal(npair(num("0x" + big), "Decimal").replace(/,/g, ""), (2n ** 256n - 1n).toString())
+for (const v of ["0", "1", "18446744073709551615", "340282366920938463463374607431768211457", "9007199254740993"]) {
+  assert.equal(npair(num(v), "Hex"), "0x" + BigInt(v).toString(16).toUpperCase(), v)
+  assert.equal(npair(num(v), "Binary").replace(/^0b| /g, ""), BigInt(v).toString(2), v)
+}
+assert.equal(npair(num("-1"), "int8"), "0xFF")
+assert.equal(npair(num("-1"), "int64"), "0xFFFF_FFFF_FFFF_FFFF")
+assert.equal(npair(num("-128"), "int8"), "0x80")
+assert.equal(npair(num("-129"), "int8"), undefined)
+assert.equal(npair(num("-129"), "int16"), "0xFF7F")
+assert.equal(npair(num("-9223372036854775808"), "int64"), "0x8000_0000_0000_0000")
+assert.equal(npair(num("0xFFFFFFFF"), "As int32"), "-1")
+assert.equal(npair(num("0x8000000000000000"), "As int64"), "-9,223,372,036,854,775,808")
+assert.equal(npair(num("65"), "Character"), "U+0041  A")
+assert.equal(npair(num("0x1F600"), "Character"), "U+1F600  😀")
+assert.equal(npair(num("1 000 000"), "Hex"), "0xF4240")
+assert.match(num("12x").error, /Not a valid/)
+assert.match(num("1".repeat(2000)).error, /Too long/)
+
+// ---- Color
+const col = (input) => run("color", { input })
+const cpair = (r, k) => (r.pairs.find((p) => p[0] === k) || [])[1]
+assert.equal(cpair(col("#ff8800"), "RGB"), "rgb(255 136 0)")
+assert.equal(cpair(col("#f80"), "HEX"), "#ff8800")
+assert.equal(cpair(col("ff8800"), "HSL"), "hsl(32 100% 50%)")
+assert.equal(cpair(col("rgb(255, 136, 0)"), "HEX"), "#ff8800")
+assert.equal(cpair(col("rgb(100% 0% 0%)"), "HEX"), "#ff0000")
+assert.equal(cpair(col("hsl(120 100% 25%)"), "HEX"), "#008000")
+assert.equal(cpair(col("hsl(120deg, 100%, 25%)"), "HEX"), "#008000")
+assert.equal(cpair(col("hsv(0 100% 100%)"), "HEX"), "#ff0000")
+assert.equal(cpair(col("rgba(33ccffee)"), "HEX"), "#33ccffee")      // Hyprland
+assert.equal(cpair(col("#33ccffee"), "Hyprland"), "rgba(33ccffee)")
+assert.equal(cpair(col("#33ccffee"), "Qt / Android"), "#ee33ccff")
+assert.equal(cpair(col("rgb(0 0 0 / 50%)"), "HEX"), "#00000080")
+assert.equal(cpair(col("tomato"), "HEX"), "#ff6347")
+assert.equal(cpair(col("#ff6347"), "CSS name"), "tomato")
+assert.equal(cpair(col("#ffffff"), "On black"), "21:1  AAA")
+assert.equal(cpair(col("#777777"), "On white"), "4.48:1  AA large text only")
+// OKLCH: CSS Color 4 reference values, and a round trip
+assert.equal(cpair(col("#ff0000"), "OKLCH"), "oklch(62.8% 0.258 29.2)")
+assert.equal(cpair(col("#ffffff"), "OKLCH"), "oklch(100% 0 0)")
+for (const h of ["#ff8800", "#123456", "#4cb86a", "#000000", "#ffffff"])
+  assert.equal(cpair(col(cpair(col(h), "OKLCH")), "HEX"), h, h)
+assert.equal(col("#ff8800").swatch.r, 1)
+assert.match(col("not a colour").error, /Not a colour/)
+assert.match(col("rgb(1 2)").error, /Not a colour/)
+
+// ---- Escape
+const esc = (input, mode) => run("escape", { input, mode }).output
+assert.equal(esc(`<a href="x">Tom & 'Jerry'</a>`, "html"), "&lt;a href=&quot;x&quot;&gt;Tom &amp; &#39;Jerry&#39;&lt;/a&gt;")
+assert.equal(esc("&lt;b&gt; caf&eacute; &copy; &#x1F600; &#169; &yuml; &bogus; &#xD800;", "html-decode"), "<b> café © 😀 © ÿ &bogus; &#xD800;")
+for (const s of ["", "plain", `a "b" \\ c`, "tab\there\nnew\r\u0001\u2028", "é 😀"]) {
+  const e = esc(s, "escape")
+  if (s) assert.equal(JSON.parse('"' + e + '"'), s, s)
+  if (s) assert.equal(esc(e, "unescape"), s, s)
+}
+assert.equal(esc(`"a\\nb\\t\\u00e9 \\u{1F600} \\x41"`, "unescape"), "a\nb\té 😀 A")
+assert.match(run("escape", { input: "\\q", mode: "unescape" }).info, /Unknown escape \\q/)
+assert.equal(esc("it's $HOME", "shell"), `'it'\\''s $HOME'`)
+assert.equal(esc("plain-arg_1.txt", "shell"), "plain-arg_1.txt")
+
+// ---- Lines
+const lines = (input, mode) => run("lines", { input, mode })
+assert.equal(lines("file10\nfile2\nFile1\nb\na", "sort").output, "a\nb\nFile1\nfile2\nfile10")
+assert.equal(lines("v1.10\nv1.9\nv1.09\nv1.2", "sort").output, "v1.2\nv1.9\nv1.09\nv1.10")
+assert.equal(lines("a\nb\nc", "sort-desc").output, "c\nb\na")
+assert.equal(lines("b\na\nb\nc\na", "unique").output, "b\na\nc")
+assert.equal(lines("x\ny\nx\nx", "count").output, "3  x\n1  y")
+assert.equal(lines("p\nq\nr\nq\np\nz\nz\nz", "count").output, "3  z\n2  p\n2  q\n1  r")
+assert.equal(lines("1\n2\n3", "reverse").output, "3\n2\n1")
+assert.equal(lines("  a  \n\n\t b\n", "trim").output, "a\nb")
+assert.equal(lines("__proto__\nconstructor\n__proto__", "unique").output, "__proto__\nconstructor")
+assert.equal(lines("é😀\nb", "sort").info, "2 lines · 2 unique · 2 words · 5 chars · 8 bytes")
+assert.match(lines("a\n".repeat(200001), "sort").error, /Too many lines/)
+
+// ---- JSON → YAML
+const yaml = (v) => run("json", { input: JSON.stringify(v), mode: "yaml" }).output
+assert.equal(yaml({ a: 1, b: "x", c: [1, "two"], d: { e: null }, f: [], g: {} }), "a: 1\nb: x\nc:\n- 1\n- two\nd:\n  e: null\nf: []\ng: {}")
+assert.equal(yaml({ on: "yes", n: "no", v: "1.0", t: "true", e: "", s: "a: b", h: "#x" }),
+  '"on": "yes"\n"n": "no"\nv: "1.0"\nt: "true"\ne: ""\ns: "a: b"\nh: "#x"')
+assert.equal(yaml([{ id: 1, tags: ["a"] }, { id: 2 }]), "- id: 1\n  tags:\n  - a\n- id: 2")
+assert.equal(yaml({ note: "line1\nline2\n", x: "a\nb", z: "a\n\n" }), 'note: |\n  line1\n  line2\nx: |-\n  a\n  b\nz: "a\\n\\n"')
+assert.equal(yaml("str"), "str")
+let deep = 1; for (let i = 0; i < 300; i++) deep = [deep]
+assert.match(run("json", { input: JSON.stringify(deep), mode: "yaml" }).error, /Nested more than 200/)
+
+// ---- JSON → TypeScript
+const ts = (v) => run("json", { input: JSON.stringify(v), mode: "ts" }).output
+assert.equal(ts({ users: [{ id: 1, email: null }, { id: 2, email: "a", admin: true }], "user-agent": "x", mixed: [1, "a"], none: [] }),
+  "export interface Root {\n  users: User[]\n  \"user-agent\": string\n  mixed: (string | number)[]\n  none: unknown[]\n}\n\n"
+  + "export interface User {\n  id: number\n  email: string | null\n  admin?: boolean\n}")
+assert.equal(ts([1, 2]), "export type Root = number[]")
+// Identical shapes share one interface; different ones under one name get a suffix
+assert.equal((ts({ home: { x: 1 }, work: { x: 2 } }).match(/interface/g) || []).length, 2)
+assert.match(ts({ categories: [{ a: 1 }], boxes: [{ b: 1 }] }), /interface Category \{[\s\S]*interface Box \{/)
+
+// ---- JSON ⇄ CSV
+const csv = (v) => run("json", { input: JSON.stringify(v), mode: "csv" })
+assert.equal(csv([{ a: 1, b: "x,y" }, { a: 2, c: { d: 1 } }]).output, 'a,b,c\n1,"x,y",\n2,,"{""d"":1}"')
+assert.equal(csv([[1, 2], ["a", 'q"']]).output, '1,2\na,"q"""')
+assert.match(csv([1, 2]).error, /array of objects/)
+const fromCsv = (input) => run("json", { input, mode: "from-csv" })
+assert.deepEqual(JSON.parse(fromCsv('name,age,zip,ok\n"Doe, J",42,00123,true\r\nAnn,,9,false\n').output),
+  [{ name: "Doe, J", age: 42, zip: "00123", ok: true }, { name: "Ann", age: null, zip: 9, ok: false }])
+assert.deepEqual(JSON.parse(fromCsv("a\tb\n1\t\"x\ny\"").output), [{ a: 1, b: "x\ny" }])
+assert.deepEqual(JSON.parse(fromCsv("a;b\n1;2").output), [{ a: 1, b: 2 }])
+assert.match(fromCsv('a\n"open').error, /Unclosed quote/)
+// CSV → JSON → CSV round trip
+const table = [{ a: "1,2", b: 'say "hi"', c: "line\nbreak" }]
+assert.deepEqual(JSON.parse(fromCsv(csv(table).output).output), table)
+
+// ---- ULID: spec example timestamp, Crockford alphabet, sorted batch
+const UL = Array.from({ length: 160 }, (_, i) => (i * 37 + 11) & 255)
+const ul = run("uuid", { mode: "ulid", count: 10, nowMs: 1469918176385, randomBytes: UL }).output.split("\n")
+assert.equal(ul.length, 10)
+for (const u of ul) assert.match(u, /^01ARYZ6S41[0-9A-HJKMNP-TV-Z]{16}$/)
+assert.deepEqual([...ul].sort(), ul)
+assert.equal(new Set(ul).size, 10)
+assert.equal(run("uuid", { mode: "ulid", count: 1, nowMs: 1469918176385, randomBytes: Array(16).fill(255) }).output, "01ARYZ6S41ZZZZZZZZZZZZZZZZ")
+assert.equal(run("uuid", { mode: "ulid", count: 1, nowMs: 0, randomBytes: Array(16).fill(0) }).output, "0".repeat(26))
+
+// ---- Clipboard detection for the new tools
+for (const [s, t] of [["#ff8800", "color"], ["rgb(1 2 3)", "color"], ["oklch(70% 0.1 50)", "color"], ["0xdeadbeef", "number"], ["0b1010", "number"]])
+  assert.equal(T.detect(s), t, s)
+for (const s of ["#zzz", "123", "rgb(nope)"]) assert.notEqual(T.detect(s), "color", s)
+
 console.log("tools.test.mjs: ok")

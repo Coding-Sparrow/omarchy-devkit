@@ -5,8 +5,10 @@
 var TOOLS = [
   { id: "json", badge: "{ }", name: "JSON", description: "Format, minify, validate and sort JSON",
     modes: [{ value: "pretty2", label: "Format 2" }, { value: "pretty4", label: "Format 4" },
-            { value: "minify", label: "Minify" }, { value: "sort", label: "Sort keys" }],
-    placeholder: "Paste JSON…" },
+            { value: "minify", label: "Minify" }, { value: "sort", label: "Sort keys" },
+            { value: "yaml", label: "→ YAML" }, { value: "ts", label: "→ TS" },
+            { value: "csv", label: "→ CSV" }, { value: "from-csv", label: "CSV →" }],
+    placeholder: "Paste JSON… (or CSV for CSV →)" },
   { id: "jwt", badge: "JWT", name: "JWT Decoder", description: "Decode header, payload and time claims (signature is not verified)",
     modes: [], placeholder: "Paste a JWT (eyJ…)" },
   { id: "base64", badge: "B64", name: "Base64", description: "Encode and decode Base64 / Base64URL (UTF-8)",
@@ -19,8 +21,8 @@ var TOOLS = [
     placeholder: "https://example.com/path?q=hello%20world" },
   { id: "time", badge: "TS", name: "Timestamp", description: "Unix epoch ⇄ human dates (s, ms, µs, ns, ISO 8601)",
     modes: [], placeholder: "1700000000, 1700000000000, 2024-05-01T10:00:00Z or empty for now" },
-  { id: "uuid", badge: "ID", name: "UUID", description: "Generate UUID v4 / v7",
-    modes: [{ value: "v4", label: "v4 random" }, { value: "v7", label: "v7 time-ordered" }],
+  { id: "uuid", badge: "ID", name: "UUID", description: "Generate UUID v4 / v7 and ULIDs",
+    modes: [{ value: "v4", label: "v4 random" }, { value: "v7", label: "v7 time-ordered" }, { value: "ulid", label: "ULID" }],
     placeholder: "" },
   { id: "hash", badge: "#", name: "Hash", description: "MD5, SHA-1, SHA-256, SHA-512 of UTF-8 text",
     modes: [], placeholder: "Text to hash…" },
@@ -36,7 +38,26 @@ var TOOLS = [
   { id: "cron", badge: "CR", name: "Cron", description: "Explain a cron expression and list its next runs",
     shortcut: "Ctrl+Shift+R",
     modes: [{ value: "local", label: "Local time" }, { value: "utc", label: "UTC" }],
-    placeholder: "*/15 9-17 * * 1-5   (minute hour day month weekday), or @daily" }
+    placeholder: "*/15 9-17 * * 1-5   (minute hour day month weekday), or @daily" },
+  { id: "escape", badge: "\\n", name: "Escape", description: "HTML entities, string escapes and shell quoting",
+    shortcut: "Ctrl+Shift+E",
+    modes: [{ value: "html", label: "HTML encode" }, { value: "html-decode", label: "HTML decode" },
+            { value: "escape", label: "Escape string" }, { value: "unescape", label: "Unescape" },
+            { value: "shell", label: "Shell quote" }],
+    placeholder: "Text to escape, or &lt;escaped&gt; text to decode…" },
+  { id: "number", badge: "0x", name: "Number Base", description: "Decimal, hex, octal and binary, exact at any size",
+    shortcut: "Ctrl+Shift+N",
+    modes: [{ value: "auto", label: "Auto" }, { value: "dec", label: "From dec" }, { value: "hex", label: "From hex" },
+            { value: "oct", label: "From oct" }, { value: "bin", label: "From bin" }],
+    placeholder: "255, 0xff, 0b1111_1111, 0o377, -1 or a 128-bit hex value" },
+  { id: "color", badge: "RGB", name: "Color", description: "HEX, RGB, HSL, OKLCH and Hyprland colours, with contrast",
+    shortcut: "Ctrl+Shift+O", modes: [],
+    placeholder: "#ff8800, rgb(255 136 0), hsl(32 100% 50%), oklch(70% 0.2 50), rgba(ff8800ff) or tomato" },
+  { id: "lines", badge: "≡", name: "Lines", description: "Sort, dedupe, count and clean up lines, with text stats",
+    shortcut: "Ctrl+Shift+L",
+    modes: [{ value: "sort", label: "Sort" }, { value: "sort-desc", label: "Sort ↓" }, { value: "unique", label: "Unique" },
+            { value: "count", label: "Count" }, { value: "reverse", label: "Reverse" }, { value: "trim", label: "Trim" }],
+    placeholder: "One item per line…" }
 ]
 
 function toolById(id) {
@@ -258,11 +279,21 @@ function jsonStats(value) {
 
 function jsonTool(input, mode) {
   if (input.trim() === "") return result()
+  if (mode === "from-csv") return csvToJson(input)
   var parsed
   try { parsed = JSON.parse(input) } catch (e) {
     return result("", jsonErrorLocation(input) || String(e.message || e))
   }
   var out
+  if ((mode === "yaml" || mode === "ts") && tooDeep(parsed, CONVERT_DEPTH_MAX))
+    return result("", "Nested more than " + CONVERT_DEPTH_MAX + " levels deep")
+  if (mode === "yaml") return result(toYaml(parsed), "", "YAML · " + jsonStats(parsed))
+  if (mode === "ts") return result(toTypeScript(parsed), "", "TypeScript inferred from this sample")
+  if (mode === "csv") {
+    var csv = toCsv(parsed)
+    if (csv.error) return result("", csv.error)
+    return result(csv.text, "", csv.rows + " rows" + (csv.cols ? " × " + csv.cols + " columns" : ""))
+  }
   if (mode === "minify") out = JSON.stringify(parsed)
   else if (mode === "sort") out = JSON.stringify(sortKeysDeep(parsed), null, 2)
   else out = JSON.stringify(parsed, null, mode === "pretty4" ? 4 : 2)
@@ -689,6 +720,7 @@ function uuidTool(mode, count, nowMs, randomBytes, upper) {
     if (typeof bytes[k] !== "number" || bytes[k] < 0 || bytes[k] > 255 || bytes[k] !== Math.floor(bytes[k]))
       return result("", "Invalid random bytes")
   }
+  if (mode === "ulid") return result(ulids(n, nowMs, bytes).join("\n"), "", n + " × ULID" + (n > 1 ? " · sorted" : ""))
   var out = []
   for (var i = 0; i < n; i++) out.push(uuid(mode, nowMs, bytes.slice(i * 16, i * 16 + 16)))
   var text = out.join("\n")
@@ -1022,6 +1054,720 @@ function diffTool(a, b) {
   return { output: text, error: "", info: add === 0 && del === 0 ? "Identical" : "+" + add + "  −" + del, rows: rows }
 }
 
+// ---------------------------------------------------------------- JSON ⇄ YAML / TypeScript / CSV
+
+var CONVERT_DEPTH_MAX = 200    // recursion depth for the emitters below
+
+function tooDeep(value, max) {
+  // Iterative, so a hostile document cannot overflow the stack while checking.
+  var stack = [[value, 0]]
+  while (stack.length) {
+    var top = stack.pop(), v = top[0], d = top[1]
+    if (d > max) return true
+    if (v && typeof v === "object") {
+      var keys = Object.keys(v)
+      for (var i = 0; i < keys.length; i++) if (v[keys[i]] && typeof v[keys[i]] === "object") stack.push([v[keys[i]], d + 1])
+    }
+  }
+  return false
+}
+
+// YAML 1.1 readers (PyYAML, older Kubernetes tooling) turn these into booleans
+// or nulls, so they are always quoted, even though YAML 1.2 would not need it.
+var YAML_RESERVED = /^(true|false|yes|no|on|off|y|n|null|~|\.nan|\.inf|-\.inf|<<)$/i
+
+function yamlScalarString(s) {
+  if (s !== "" && !YAML_RESERVED.test(s) && /^[A-Za-z_\/][A-Za-z0-9_.\/@-]*( [A-Za-z0-9_.\/@()-]+)*$/.test(s)) return s
+  return JSON.stringify(s)   // JSON strings are valid YAML double-quoted scalars
+}
+
+function yamlBlock(s, indent) {
+  // A literal block keeps multi-line text readable. Only used when it
+  // round-trips exactly; otherwise the quoted form is the safe fallback.
+  if (/[\x00-\x08\x0b-\x1f\x7f]|[ \t]\n|^[ \t]|[ \t]$/.test(s) || /\n\n+$/.test(s)) return null
+  var chomp = /\n$/.test(s) ? "|" : "|-"
+  var body = s.replace(/\n$/, "").split("\n").map(function (l) { return l === "" ? "" : indent + l }).join("\n")
+  return chomp + "\n" + body
+}
+
+function yamlValue(v, indent) {
+  if (v === null) return "null"
+  if (typeof v === "boolean" || typeof v === "number") return String(v)
+  if (typeof v === "string") {
+    if (v.indexOf("\n") !== -1) { var b = yamlBlock(v, indent + "  "); if (b) return b }
+    return yamlScalarString(v)
+  }
+  return null
+}
+
+function yamlEmit(v, indent, out) {
+  if (Array.isArray(v)) {
+    v.forEach(function (item) {
+      if (item && typeof item === "object" && Object.keys(item).length) {
+        var lines = []
+        yamlEmit(item, indent + "  ", lines)
+        lines[0] = indent + "- " + lines[0].slice(indent.length + 2)
+        Array.prototype.push.apply(out, lines)
+      } else {
+        out.push(indent + "- " + yamlInline(item, indent + "  "))
+      }
+    })
+    return
+  }
+  Object.keys(v).forEach(function (k) {
+    var item = v[k], key = yamlScalarString(k)
+    if (item && typeof item === "object" && Object.keys(item).length) {
+      out.push(indent + key + ":")
+      yamlEmit(item, Array.isArray(item) ? indent : indent + "  ", out)
+    } else {
+      out.push(indent + key + ": " + yamlInline(item, indent))
+    }
+  })
+}
+
+function yamlInline(v, indent) {
+  if (Array.isArray(v)) return "[]"
+  if (v && typeof v === "object") return "{}"
+  return yamlValue(v, indent)
+}
+
+function toYaml(value) {
+  if (!value || typeof value !== "object" || !Object.keys(value).length) return yamlInline(value, "")
+  var out = []
+  yamlEmit(value, "", out)
+  return out.join("\n")
+}
+
+// TypeScript from a sample. Arrays merge their elements, so a field missing
+// from some objects becomes optional and one that is sometimes null becomes
+// `| null`. Identical shapes share one interface.
+function tsShape() { return { prims: {}, obj: null, arr: null, emptyArr: false } }
+
+function tsAdd(shape, v) {
+  if (v === null) shape.prims["null"] = true
+  else if (Array.isArray(v)) {
+    if (!shape.arr) shape.arr = tsShape()
+    if (v.length === 0) shape.emptyArr = true
+    v.forEach(function (x) { tsAdd(shape.arr, x) })
+  } else if (typeof v === "object") {
+    if (!shape.obj) shape.obj = { total: 0, order: [], fields: {} }
+    var o = shape.obj
+    o.total++
+    Object.keys(v).forEach(function (k) {
+      if (!Object.prototype.hasOwnProperty.call(o.fields, k)) { o.fields[k] = { count: 0, shape: tsShape() }; o.order.push(k) }
+      o.fields[k].count++
+      tsAdd(o.fields[k].shape, v[k])
+    })
+  } else shape.prims[typeof v] = true
+}
+
+function tsName(key) {
+  var words = String(key).replace(/([a-z0-9])([A-Z])/g, "$1 $2").split(/[^A-Za-z0-9]+/).filter(function (w) { return w })
+  var name = words.map(function (w) { return w.charAt(0).toUpperCase() + w.slice(1) }).join("")
+  if (!name) name = "Item"
+  if (/^[0-9]/.test(name)) name = "T" + name
+  return name
+}
+
+function tsSingular(name) {
+  if (/ies$/.test(name)) return name.slice(0, -3) + "y"
+  if (/(ss|x|ch|sh)es$/.test(name)) return name.slice(0, -2)
+  if (/[^s]s$/.test(name)) return name.slice(0, -1)
+  return name + "Item"
+}
+
+function toTypeScript(value) {
+  var shape = tsShape()
+  tsAdd(shape, value)
+  var decls = [], bySignature = {}, usedNames = {}
+
+  function typeOf(s, hint) {
+    var parts = []
+    if (s.obj) parts.push(iface(s.obj, hint))
+    if (s.arr) {
+      var el = typeOf(s.arr, tsSingular(hint))
+      if (el === "never") el = "unknown"
+      parts.push(/[|]/.test(el) ? "(" + el + ")[]" : el + "[]")
+    }
+    ;["string", "number", "boolean"].forEach(function (p) { if (s.prims[p]) parts.push(p) })
+    if (s.prims["null"]) parts.push("null")
+    return parts.length ? parts.join(" | ") : "never"
+  }
+
+  function iface(o, hint) {
+    var body = o.order.map(function (k) {
+      var f = o.fields[k]
+      var key = /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(k) ? k : JSON.stringify(k)
+      var t = typeOf(f.shape, tsName(k))
+      return "  " + key + (f.count < o.total ? "?" : "") + ": " + (t === "never" ? "unknown" : t)
+    }).join("\n")
+    if (Object.prototype.hasOwnProperty.call(bySignature, body)) return bySignature[body]
+    var name = hint, n = 2
+    while (usedNames[name]) name = hint + n++
+    usedNames[name] = true
+    bySignature[body] = name
+    decls.push("export interface " + name + " {\n" + body + (body ? "\n" : "") + "}")
+    return name
+  }
+
+  var root = typeOf(shape, "Root")
+  if (!shape.obj) decls.push("export type Root = " + (root === "never" ? "unknown" : root))
+  // Root first, then nested types in the order they were found.
+  decls.sort(function (a, b) { return (/^export (interface|type) Root\b/.test(b) ? 1 : 0) - (/^export (interface|type) Root\b/.test(a) ? 1 : 0) })
+  return decls.join("\n\n")
+}
+
+function csvCell(v) {
+  var s = v === null || v === undefined ? "" : (typeof v === "object" ? JSON.stringify(v) : String(v))
+  return /[",\r\n]|^\s|\s$/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s
+}
+
+function toCsv(value) {
+  if (!Array.isArray(value)) value = [value]
+  if (value.length === 0) return { error: "Nothing to write: the array is empty" }
+  if (value.every(Array.isArray)) return { text: value.map(function (r) { return r.map(csvCell).join(",") }).join("\n"), rows: value.length }
+  if (!value.every(function (r) { return r && typeof r === "object" && !Array.isArray(r) }))
+    return { error: "CSV needs an array of objects (or of arrays)" }
+  var cols = [], seen = {}
+  value.forEach(function (r) { Object.keys(r).forEach(function (k) { if (!seen.hasOwnProperty(k)) { seen[k] = true; cols.push(k) } }) })
+  var lines = [cols.map(csvCell).join(",")]
+  value.forEach(function (r) { lines.push(cols.map(function (c) { return csvCell(r.hasOwnProperty(c) ? r[c] : null) }).join(",")) })
+  return { text: lines.join("\n"), rows: value.length, cols: cols.length }
+}
+
+// RFC 4180, with the delimiter sniffed from the first line (comma, tab or
+// semicolon). Single pass, so it stays linear on any input.
+function parseCsv(text) {
+  var first = text.split("\n", 1)[0]
+  var counts = { ",": 0, "\t": 0, ";": 0 }, q = false
+  for (var i = 0; i < first.length; i++) {
+    var ch = first.charAt(i)
+    if (ch === '"') q = !q
+    else if (!q && counts.hasOwnProperty(ch)) counts[ch]++
+  }
+  var delim = counts["\t"] > counts[","] && counts["\t"] >= counts[";"] ? "\t" : (counts[";"] > counts[","] ? ";" : ",")
+  var rows = [], row = [], cell = "", quoted = false, j = 0, n = text.length
+  while (j < n) {
+    if (quoted) {
+      // Copy everything up to the next quote in one slice.
+      var qi = text.indexOf('"', j)
+      if (qi === -1) { j = n; break }
+      cell += text.slice(j, qi)
+      if (text.charAt(qi + 1) === '"') { cell += '"'; j = qi + 2 }
+      else { quoted = false; j = qi + 1 }
+      continue
+    }
+    var c = text.charAt(j)
+    if (c === '"' && cell === "") { quoted = true; j++; continue }
+    if (c === delim) { row.push(cell); cell = ""; j++; continue }
+    if (c === "\r" && text.charAt(j + 1) === "\n") { j++; continue }
+    if (c === "\n") { row.push(cell); rows.push(row); row = []; cell = ""; j++; continue }
+    // An unquoted run: up to the next delimiter, quote or line break.
+    var end = j + 1
+    while (end < n) {
+      var e = text.charAt(end)
+      if (e === delim || e === "\n" || e === "\r" || e === '"') break
+      end++
+    }
+    cell += text.slice(j, end)
+    j = end
+  }
+  if (quoted) return { error: "Unclosed quote in the CSV" }
+  if (cell !== "" || row.length) { row.push(cell); rows.push(row) }
+  return { rows: rows, delim: delim }
+}
+
+// Only canonical numbers and true/false become typed: "00123" stays a string.
+function csvTyped(s) {
+  if (s === "") return null
+  if (s === "true" || s === "false") return s === "true"
+  if (/^-?(0|[1-9]\d{0,14})(\.\d+)?$/.test(s) && String(Number(s)) === s) return Number(s)
+  return s
+}
+
+function csvToJson(input) {
+  var p = parseCsv(input)
+  if (p.error) return result("", p.error)
+  if (p.rows.length < 1) return result()
+  var header = p.rows[0].map(function (h, i) { return h.trim() || "column" + (i + 1) })
+  var out = p.rows.slice(1).filter(function (r) { return !(r.length === 1 && r[0] === "") }).map(function (r) {
+    var o = {}
+    header.forEach(function (h, i) { o[h] = csvTyped(i < r.length ? r[i] : "") })
+    return o
+  })
+  var names = { ",": "comma", "\t": "tab", ";": "semicolon" }
+  return result(JSON.stringify(out, null, 2), "", out.length + " rows × " + header.length + " columns · " + names[p.delim] + "-separated")
+}
+
+// ---------------------------------------------------------------- Escape
+
+var HTML_ENTITIES = {
+  amp: "&", lt: "<", gt: ">", quot: "\"", apos: "'", nbsp: "\u00a0", copy: "©", reg: "®", trade: "™",
+  hellip: "…", mdash: "—", ndash: "–", lsquo: "‘", rsquo: "’", ldquo: "“", rdquo: "”", bull: "•",
+  middot: "·", deg: "°", plusmn: "±", times: "×", divide: "÷", euro: "€", pound: "£", yen: "¥", cent: "¢",
+  sect: "§", para: "¶", laquo: "«", raquo: "»", larr: "←", rarr: "→", uarr: "↑", darr: "↓", harr: "↔",
+  ne: "≠", le: "≤", ge: "≥", infin: "∞", micro: "µ", frac12: "½", frac14: "¼", frac34: "¾", sup2: "²",
+  sup3: "³", iexcl: "¡", iquest: "¿", shy: "\u00ad", zwj: "\u200d", zwnj: "\u200c", ensp: "\u2002",
+  emsp: "\u2003", thinsp: "\u2009", dagger: "†", Dagger: "‡", permil: "‰", prime: "′", check: "✓"
+}
+
+// The HTML 4 Latin-1 names, in code point order from U+00A0.
+;("nbsp iexcl cent pound curren yen brvbar sect uml copy ordf laquo not shy reg macr deg plusmn sup2 sup3 acute "
+  + "micro para middot cedil sup1 ordm raquo frac14 frac12 frac34 iquest Agrave Aacute Acirc Atilde Auml Aring AElig "
+  + "Ccedil Egrave Eacute Ecirc Euml Igrave Iacute Icirc Iuml ETH Ntilde Ograve Oacute Ocirc Otilde Ouml times Oslash "
+  + "Ugrave Uacute Ucirc Uuml Yacute THORN szlig agrave aacute acirc atilde auml aring aelig ccedil egrave eacute ecirc "
+  + "euml igrave iacute icirc iuml eth ntilde ograve oacute ocirc otilde ouml divide oslash ugrave uacute ucirc uuml "
+  + "yacute thorn yuml").split(" ").forEach(function (name, i) { HTML_ENTITIES[name] = String.fromCharCode(0xa0 + i) })
+
+function codePoint(n) {
+  if (!(n >= 0 && n <= 0x10ffff) || (n >= 0xd800 && n <= 0xdfff)) return null
+  return String.fromCodePoint(n)
+}
+
+function htmlDecode(s) {
+  var unknown = 0, count = 0
+  var out = s.replace(/&(#[xX][0-9A-Fa-f]{1,6}|#[0-9]{1,7}|[A-Za-z][A-Za-z0-9]{1,31});/g, function (m, body) {
+    var ch = null
+    if (body.charAt(0) === "#") ch = codePoint(/^#[xX]/.test(body) ? parseInt(body.slice(2), 16) : parseInt(body.slice(1), 10))
+    else if (HTML_ENTITIES.hasOwnProperty(body)) ch = HTML_ENTITIES[body]
+    if (ch === null) { unknown++; return m }
+    count++
+    return ch
+  })
+  return { text: out, count: count, unknown: unknown }
+}
+
+function htmlEncode(s) {
+  var map = { "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" }
+  return s.replace(/[&<>"']/g, function (c) { return map[c] })
+}
+
+// JavaScript/JSON-style string escapes. Non-ASCII stays as is: it is valid in
+// every modern string literal and far easier to read.
+function stringEscape(s) {
+  return s.replace(/[\\"\u0000-\u001f\u007f\u2028\u2029]/g, function (c) {
+    var m = { "\\": "\\\\", "\"": "\\\"", "\n": "\\n", "\r": "\\r", "\t": "\\t", "\b": "\\b", "\f": "\\f" }
+    return m[c] || "\\u" + ("000" + c.charCodeAt(0).toString(16)).slice(-4)
+  })
+}
+
+function stringUnescape(s) {
+  var bad = ""
+  var t = s.replace(/^"([\s\S]*)"$/, "$1").replace(/\\(u\{[0-9A-Fa-f]{1,6}\}|u[0-9A-Fa-f]{4}|x[0-9A-Fa-f]{2}|[0-7]{1,3}|[\s\S])/g, function (m, e) {
+    var simple = { n: "\n", r: "\r", t: "\t", b: "\b", f: "\f", v: "\v", "\\": "\\", "\"": "\"", "'": "'", "/": "/", "`": "`", "\n": "" }
+    if (simple.hasOwnProperty(e)) return simple[e]
+    if (e.charAt(0) === "u" && e.charAt(1) === "{") { var c = codePoint(parseInt(e.slice(2, -1), 16)); if (c !== null) return c }
+    else if (e.charAt(0) === "u" && e.length === 5) return String.fromCharCode(parseInt(e.slice(1), 16))
+    else if (e.charAt(0) === "x" && e.length === 3) return String.fromCharCode(parseInt(e.slice(1), 16))
+    else if (/^[0-7]+$/.test(e)) return String.fromCharCode(parseInt(e, 8) & 255)
+    if (!bad) bad = m
+    return e
+  })
+  return { text: t, bad: bad }
+}
+
+// POSIX single quotes: nothing inside is special, so the result is safe to
+// paste into sh, bash or zsh as one argument.
+function shellQuote(s) {
+  if (/^[A-Za-z0-9_@%+=:,.\/-]+$/.test(s)) return s
+  return "'" + s.replace(/'/g, "'\\''") + "'"
+}
+
+var ESCAPE_MAX = 262144      // escaping is for snippets; keeps the UI thread responsive
+
+function escapeTool(input, mode) {
+  if (input === "") return result()
+  if (input.length > ESCAPE_MAX) return result("", "Too long to escape here (256 KiB max)")
+  if (mode === "html-decode") {
+    var d = htmlDecode(input)
+    return result(d.text, "", d.count + " entities decoded" + (d.unknown ? " · " + d.unknown + " unknown left as is" : ""))
+  }
+  if (mode === "unescape") {
+    var u = stringUnescape(input)
+    return result(u.text, "", u.bad ? "Unknown escape " + u.bad + " kept as its character" : "Unescaped")
+  }
+  if (mode === "escape") return result(stringEscape(input), "", "Paste between double quotes in JSON, JS, Go, Rust…")
+  if (mode === "shell") return result(shellQuote(input), "", "One argument for sh, bash or zsh")
+  return result(htmlEncode(input), "", "& < > \" ' encoded")
+}
+
+// ---------------------------------------------------------------- Number base
+
+// Arbitrary precision on 16-bit limbs (little-endian). Qt's engine has no
+// BigInt, and a 128-bit hash or a 64-bit ID must convert exactly.
+var NUMBER_MAX = 1024          // digits; conversion is quadratic in length
+var DIGITS = "0123456789abcdefghijklmnopqrstuvwxyz"
+
+function bnMulAdd(limbs, mul, add) {
+  var carry = add
+  for (var i = 0; i < limbs.length; i++) {
+    var v = limbs[i] * mul + carry
+    limbs[i] = v & 0xffff
+    carry = Math.floor(v / 65536)
+  }
+  while (carry) { limbs.push(carry & 0xffff); carry = Math.floor(carry / 65536) }
+}
+
+function bnFrom(digits, base) {
+  var limbs = [0]
+  for (var i = 0; i < digits.length; i++) bnMulAdd(limbs, base, DIGITS.indexOf(digits.charAt(i)))
+  return bnTrim(limbs)
+}
+
+function bnTrim(l) { while (l.length > 1 && l[l.length - 1] === 0) l.pop(); return l }
+function bnIsZero(l) { return l.length === 1 && l[0] === 0 }
+
+function bnTo(limbs, base) {
+  var l = limbs.slice(), out = []
+  while (!bnIsZero(l)) {
+    var rem = 0
+    for (var i = l.length - 1; i >= 0; i--) {
+      var v = rem * 65536 + l[i]
+      l[i] = Math.floor(v / base)
+      rem = v % base
+    }
+    out.push(DIGITS.charAt(rem))
+    bnTrim(l)
+  }
+  return out.length ? out.reverse().join("") : "0"
+}
+
+function bnBits(l) {
+  var top = l[l.length - 1]
+  return top === 0 ? 0 : (l.length - 1) * 16 + Math.floor(Math.log(top) / Math.LN2) + 1
+}
+
+// 2^w − v (mod 2^w): a negative number's two's complement, and the
+// magnitude of a value whose sign bit is set. Invert, then add one.
+function bnComplement(l, w) {
+  var out = []
+  for (var i = 0; i < w / 16 || (w < 16 && i === 0); i++) out.push(~(l[i] || 0) & 0xffff)
+  if (w < 16) out[0] &= (1 << w) - 1
+  bnMulAdd(out, 1, 1)
+  out.length = Math.max(1, Math.ceil(w / 16))
+  if (w < 16) out[0] &= (1 << w) - 1
+  return bnTrim(out)
+}
+
+function zeros(n) { return new Array(Math.max(0, n) + 1).join("0") }
+
+function groupDigits(s, size, sep) {
+  var out = []
+  for (var end = s.length; end > 0; end -= size) out.unshift(s.slice(Math.max(0, end - size), end))
+  return out.join(sep)
+}
+
+function numberTool(input, mode) {
+  var raw = input.trim()
+  if (raw === "") return result("", "", "Enter a number: 255, 0xff, 0b1111_1111, 0o377 or -1")
+  if (raw.length > NUMBER_MAX + 3) return result("", "Too long (" + NUMBER_MAX + " digits max)")
+  var s = raw.toLowerCase().replace(/[_\s,']/g, "")
+  var neg = s.charAt(0) === "-"
+  if (neg || s.charAt(0) === "+") s = s.slice(1)
+  var base = { dec: 10, hex: 16, oct: 8, bin: 2 }[mode] || 0
+  var prefix = /^0x/.test(s) ? 16 : /^0b/.test(s) ? 2 : /^0o/.test(s) ? 8 : 0
+  if (prefix && (base === 0 || base === prefix)) { base = prefix; s = s.slice(2) }
+  else if (base === 16 && /^#/.test(s)) s = s.slice(1)
+  if (base === 0) base = /^[0-9]+$/.test(s) ? 10 : (/^[0-9a-f]+$/.test(s) ? 16 : 10)
+  var valid = new RegExp("^[" + DIGITS.slice(0, base) + "]+$")
+  if (!valid.test(s)) return result("", "Not a valid base-" + base + " number")
+  var v = bnFrom(s, base)
+  var bits = bnBits(v)
+  var sign = neg && !bnIsZero(v) ? "-" : ""
+  var hex = bnTo(v, 16), bin = bnTo(v, 2)
+  var pairs = [
+    ["Decimal", sign + groupDigits(bnTo(v, 10), 3, ",")],
+    ["Hex", sign + "0x" + hex.toUpperCase()],
+    ["Octal", sign + "0o" + bnTo(v, 8)],
+    ["Binary", sign + "0b" + groupDigits(bin, 4, " ")]
+  ]
+  if (sign) {
+    // Two's complement at each width that can hold it (down to −2^(w−1)).
+    ;[8, 16, 32, 64].forEach(function (w) {
+      if (bits > w || (bits === w && bin !== "1" + zeros(w - 1))) return
+      var t = bnTo(bnComplement(v, w), 16).toUpperCase()
+      pairs.push(["int" + w, "0x" + groupDigits(zeros(w / 4 - t.length) + t, 4, "_")])
+    })
+  } else {
+    // A value with its top bit set at a standard width also reads as negative.
+    ;[8, 16, 32, 64].forEach(function (w) {
+      if (bits === w) pairs.push(["As int" + w, "-" + groupDigits(bnTo(bnComplement(v, w), 10), 3, ",")])
+    })
+  }
+  pairs.push(["Bits", bits + (bits > 0 ? " (" + Math.ceil(bits / 8) + " byte" + (Math.ceil(bits / 8) === 1 ? "" : "s") + ")" : "")])
+  if (!sign && bits <= 21) {
+    var cp = parseInt(hex, 16)
+    var ch = cp >= 0x20 && cp !== 0x7f && !(cp >= 0x80 && cp < 0xa0) ? codePoint(cp) : null
+    if (ch) pairs.push(["Character", "U+" + ("000" + hex.toUpperCase()).slice(-Math.max(4, hex.length)) + "  " + ch])
+  }
+  return withPairs(pairs, "Read as base " + base + (prefix && prefix === base ? " (prefix)" : (mode && mode !== "auto" ? "" : " (auto)")))
+}
+
+// ---------------------------------------------------------------- Color
+
+// CSS named colours (the same list Qt and every browser know).
+var CSS_COLORS = ("aliceblue f0f8ff antiquewhite faebd7 aqua 00ffff aquamarine 7fffd4 azure f0ffff beige f5f5dc bisque ffe4c4 "
+  + "black 000000 blanchedalmond ffebcd blue 0000ff blueviolet 8a2be2 brown a52a2a burlywood deb887 cadetblue 5f9ea0 "
+  + "chartreuse 7fff00 chocolate d2691e coral ff7f50 cornflowerblue 6495ed cornsilk fff8dc crimson dc143c cyan 00ffff "
+  + "darkblue 00008b darkcyan 008b8b darkgoldenrod b8860b darkgray a9a9a9 darkgreen 006400 darkgrey a9a9a9 darkkhaki bdb76b "
+  + "darkmagenta 8b008b darkolivegreen 556b2f darkorange ff8c00 darkorchid 9932cc darkred 8b0000 darksalmon e9967a "
+  + "darkseagreen 8fbc8f darkslateblue 483d8b darkslategray 2f4f4f darkslategrey 2f4f4f darkturquoise 00ced1 darkviolet 9400d3 "
+  + "deeppink ff1493 deepskyblue 00bfff dimgray 696969 dimgrey 696969 dodgerblue 1e90ff firebrick b22222 floralwhite fffaf0 "
+  + "forestgreen 228b22 fuchsia ff00ff gainsboro dcdcdc ghostwhite f8f8ff gold ffd700 goldenrod daa520 gray 808080 green 008000 "
+  + "greenyellow adff2f grey 808080 honeydew f0fff0 hotpink ff69b4 indianred cd5c5c indigo 4b0082 ivory fffff0 khaki f0e68c "
+  + "lavender e6e6fa lavenderblush fff0f5 lawngreen 7cfc00 lemonchiffon fffacd lightblue add8e6 lightcoral f08080 "
+  + "lightcyan e0ffff lightgoldenrodyellow fafad2 lightgray d3d3d3 lightgreen 90ee90 lightgrey d3d3d3 lightpink ffb6c1 "
+  + "lightsalmon ffa07a lightseagreen 20b2aa lightskyblue 87cefa lightslategray 778899 lightslategrey 778899 lightsteelblue b0c4de "
+  + "lightyellow ffffe0 lime 00ff00 limegreen 32cd32 linen faf0e6 magenta ff00ff maroon 800000 mediumaquamarine 66cdaa "
+  + "mediumblue 0000cd mediumorchid ba55d3 mediumpurple 9370db mediumseagreen 3cb371 mediumslateblue 7b68ee "
+  + "mediumspringgreen 00fa9a mediumturquoise 48d1cc mediumvioletred c71585 midnightblue 191970 mintcream f5fffa "
+  + "mistyrose ffe4e1 moccasin ffe4b5 navajowhite ffdead navy 000080 oldlace fdf5e6 olive 808000 olivedrab 6b8e23 orange ffa500 "
+  + "orangered ff4500 orchid da70d6 palegoldenrod eee8aa palegreen 98fb98 paleturquoise afeeee palevioletred db7093 "
+  + "papayawhip ffefd5 peachpuff ffdab9 peru cd853f pink ffc0cb plum dda0dd powderblue b0e0e6 purple 800080 rebeccapurple 663399 "
+  + "red ff0000 rosybrown bc8f8f royalblue 4169e1 saddlebrown 8b4513 salmon fa8072 sandybrown f4a460 seagreen 2e8b57 "
+  + "seashell fff5ee sienna a0522d silver c0c0c0 skyblue 87ceeb slateblue 6a5acd slategray 708090 slategrey 708090 snow fffafa "
+  + "springgreen 00ff7f steelblue 4682b4 tan d2b48c teal 008080 thistle d8bfd8 tomato ff6347 turquoise 40e0d0 violet ee82ee "
+  + "wheat f5deb3 white ffffff whitesmoke f5f5f5 yellow ffff00 yellowgreen 9acd32").split(" ")
+
+function colorNamed(name) {
+  for (var i = 0; i < CSS_COLORS.length; i += 2) if (CSS_COLORS[i] === name) return CSS_COLORS[i + 1]
+  return null
+}
+
+function clamp(v, lo, hi) { return v < lo ? lo : (v > hi ? hi : v) }
+function round(v, places) { var f = Math.pow(10, places || 0); return Math.round(v * f) / f }
+
+function hslToRgb(h, s, l) {
+  h = ((h % 360) + 360) % 360
+  var c = (1 - Math.abs(2 * l - 1)) * s, x = c * (1 - Math.abs((h / 60) % 2 - 1)), m = l - c / 2
+  var t = h < 60 ? [c, x, 0] : h < 120 ? [x, c, 0] : h < 180 ? [0, c, x] : h < 240 ? [0, x, c] : h < 300 ? [x, 0, c] : [c, 0, x]
+  return [(t[0] + m) * 255, (t[1] + m) * 255, (t[2] + m) * 255]
+}
+
+function rgbToHsl(r, g, b) {
+  r /= 255; g /= 255; b /= 255
+  var max = Math.max(r, g, b), min = Math.min(r, g, b), l = (max + min) / 2, d = max - min, h = 0, s = 0
+  if (d) {
+    s = d / (1 - Math.abs(2 * l - 1))
+    h = max === r ? 60 * (((g - b) / d) % 6) : max === g ? 60 * ((b - r) / d + 2) : 60 * ((r - g) / d + 4)
+  }
+  return [(h + 360) % 360, s, l]
+}
+
+function rgbToHsv(r, g, b) {
+  var hsl = rgbToHsl(r, g, b), max = Math.max(r, g, b) / 255, min = Math.min(r, g, b) / 255
+  return [hsl[0], max ? (max - min) / max : 0, max]
+}
+
+function srgbToLinear(c) { c /= 255; return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4) }
+function linearToSrgb(c) { return 255 * (c <= 0.0031308 ? 12.92 * c : 1.055 * Math.pow(c, 1 / 2.4) - 0.055) }
+
+// OKLab (Björn Ottosson), the space behind CSS oklch().
+function rgbToOklch(r, g, b) {
+  var R = srgbToLinear(r), G = srgbToLinear(g), B = srgbToLinear(b)
+  var l = Math.cbrt(0.4122214708 * R + 0.5363325363 * G + 0.0514459929 * B)
+  var m = Math.cbrt(0.2119034982 * R + 0.6806995451 * G + 0.1073969566 * B)
+  var s = Math.cbrt(0.0883024619 * R + 0.2817188376 * G + 0.6299787005 * B)
+  var L = 0.2104542553 * l + 0.7936177850 * m - 0.0040720468 * s
+  var A = 1.9779984951 * l - 2.4285922050 * m + 0.4505937099 * s
+  var Bb = 0.0259040371 * l + 0.7827717662 * m - 0.8086757660 * s
+  var C = Math.sqrt(A * A + Bb * Bb), H = Math.atan2(Bb, A) * 180 / Math.PI
+  return [L, C, C < 0.0002 ? 0 : (H + 360) % 360]
+}
+
+function oklchToRgb(L, C, H) {
+  var a = C * Math.cos(H * Math.PI / 180), b = C * Math.sin(H * Math.PI / 180)
+  var l = Math.pow(L + 0.3963377774 * a + 0.2158037573 * b, 3)
+  var m = Math.pow(L - 0.1055613458 * a - 0.0638541728 * b, 3)
+  var s = Math.pow(L - 0.0894841775 * a - 1.2914855480 * b, 3)
+  return [linearToSrgb(4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s),
+          linearToSrgb(-1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s),
+          linearToSrgb(-0.0041960863 * l - 0.7034186147 * m + 1.7076147010 * s)]
+}
+
+// One CSS-style number: "50%", "0.5", "120deg"…; `scale` maps 100% to it.
+function colorNum(t, scale) {
+  var m = /^(-?\d*\.?\d+(?:e[-+]?\d+)?)(%|deg|turn|rad)?$/i.exec(t)
+  if (!m) return NaN
+  var v = Number(m[1]), u = (m[2] || "").toLowerCase()
+  if (u === "%") return v / 100 * scale
+  if (u === "turn") return v * 360
+  if (u === "rad") return v * 180 / Math.PI
+  return v
+}
+
+function parseColor(text) {
+  var s = text.trim().toLowerCase().replace(/;$/, "")
+  var hex = /^(?:#|0x)?([0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/.exec(s)
+  // Hyprland writes rgb(rrggbb) and rgba(rrggbbaa).
+  var hypr = /^rgba?\(\s*([0-9a-f]{6}|[0-9a-f]{8})\s*\)$/.exec(s)
+  if (hypr) hex = hypr
+  if (!hex && colorNamed(s)) hex = [s, colorNamed(s)]
+  if (s === "transparent") return { r: 0, g: 0, b: 0, a: 0, from: "name" }
+  if (hex) {
+    var h = hex[1]
+    if (h.length <= 4) h = h.split("").map(function (c) { return c + c }).join("")
+    // Bare digits like "123" are more likely a number than a colour.
+    if (!/^#|^0x|^rgba?\(/.test(s) && !colorNamed(s) && !/[a-f]/.test(hex[1]) && hex[1].length !== 6) return null
+    return { r: parseInt(h.slice(0, 2), 16), g: parseInt(h.slice(2, 4), 16), b: parseInt(h.slice(4, 6), 16),
+             a: h.length === 8 ? parseInt(h.slice(6, 8), 16) / 255 : 1, from: hypr ? "hyprland" : (colorNamed(s) ? "name" : "hex") }
+  }
+  var fn = /^(rgba?|hsla?|hsv|hsb|oklch)\(\s*([^)]*)\)$/.exec(s)
+  if (!fn) return null
+  var args = fn[2].replace(/\s*\/\s*/, " / ").split(/\s*,\s*|\s+/).filter(function (x) { return x !== "" })
+  var alpha = 1, slash = args.indexOf("/")
+  if (slash !== -1) { alpha = colorNum(args[slash + 1] || "", 1); args = args.slice(0, slash) }
+  else if (args.length === 4) { alpha = colorNum(args[3], 1); args = args.slice(0, 3) }
+  if (args.length !== 3 || isNaN(alpha)) return null
+  var f = fn[1], rgb
+  if (f === "rgb" || f === "rgba") rgb = args.map(function (x) { return colorNum(x, 255) })
+  else if (f === "oklch") rgb = oklchToRgb(colorNum(args[0], 1), colorNum(args[1], 0.4), colorNum(args[2], 1))
+  else {
+    var hh = colorNum(args[0], 360), ss = colorNum(args[1], 1), ll = colorNum(args[2], 1)
+    if (!/%$/.test(args[1]) && ss > 1) ss /= 100
+    if (!/%$/.test(args[2]) && ll > 1) ll /= 100
+    if (f === "hsv" || f === "hsb") {
+      // HSV → HSL, then the shared path.
+      var l2 = ll * (1 - ss / 2)
+      ss = l2 === 0 || l2 === 1 ? 0 : (ll - l2) / Math.min(l2, 1 - l2)
+      ll = l2
+    }
+    rgb = hslToRgb(hh, ss, ll)
+  }
+  if (rgb.some(isNaN)) return null
+  return { r: clamp(Math.round(rgb[0]), 0, 255), g: clamp(Math.round(rgb[1]), 0, 255), b: clamp(Math.round(rgb[2]), 0, 255),
+           a: clamp(alpha, 0, 1), from: f, clipped: f === "oklch" && rgb.some(function (v) { return v < -0.5 || v > 255.5 }) }
+}
+
+function hex2(n) { return ("0" + Math.round(n).toString(16)).slice(-2) }
+
+function relLuminance(c) {
+  return 0.2126 * srgbToLinear(c.r) + 0.7152 * srgbToLinear(c.g) + 0.0722 * srgbToLinear(c.b)
+}
+
+function contrastText(ratio) {
+  return round(ratio, 2) + ":1  " + (ratio >= 7 ? "AAA" : ratio >= 4.5 ? "AA" : ratio >= 3 ? "AA large text only" : "fails")
+}
+
+function colorTool(input) {
+  if (input.trim() === "") return result("", "", "Enter a colour: #ff8800, rgb(255 136 0), hsl(32 100% 50%), oklch(…) or a name")
+  var c = parseColor(input)
+  if (!c) return result("", "Not a colour this tool reads (hex, rgb, hsl, hsv, oklch, Hyprland rgba(…) or a CSS name)")
+  var hex = "#" + hex2(c.r) + hex2(c.g) + hex2(c.b), aa = hex2(c.a * 255)
+  var hsl = rgbToHsl(c.r, c.g, c.b), hsv = rgbToHsv(c.r, c.g, c.b), ok = rgbToOklch(c.r, c.g, c.b)
+  var alphaCss = c.a < 1 ? " / " + round(c.a, 3) : ""
+  var name = null
+  for (var i = 0; i < CSS_COLORS.length; i += 2) if (CSS_COLORS[i + 1] === hex.slice(1)) { name = CSS_COLORS[i]; break }
+  var lum = relLuminance(c)
+  var pairs = [
+    ["HEX", c.a < 1 ? hex + aa : hex],
+    ["RGB", "rgb(" + c.r + " " + c.g + " " + c.b + alphaCss + ")"],
+    ["HSL", "hsl(" + round(hsl[0]) + " " + round(hsl[1] * 100) + "% " + round(hsl[2] * 100) + "%" + alphaCss + ")"],
+    ["HSV", "hsv(" + round(hsv[0]) + " " + round(hsv[1] * 100) + "% " + round(hsv[2] * 100) + "%)"],
+    ["OKLCH", "oklch(" + round(ok[0] * 100, 1) + "% " + round(ok[1], 3) + " " + round(ok[2], 1) + alphaCss + ")"],
+    ["Hyprland", "rgba(" + hex.slice(1) + aa + ")"],
+    ["Legacy CSS", c.a < 1 ? "rgba(" + c.r + ", " + c.g + ", " + c.b + ", " + round(c.a, 3) + ")" : "rgb(" + c.r + ", " + c.g + ", " + c.b + ")"],
+    ["Qt / Android", "#" + aa + hex.slice(1)],
+    ["On white", contrastText(1.05 / (lum + 0.05))],
+    ["On black", contrastText((lum + 0.05) / 0.05)]
+  ]
+  if (name) pairs.push(["CSS name", name])
+  var r = withPairs(pairs, (c.clipped ? "Outside sRGB, clipped · " : "") + "Read as " + c.from)
+  r.swatch = { r: c.r / 255, g: c.g / 255, b: c.b / 255, a: c.a, dark: lum < 0.18 }
+  return r
+}
+
+// ---------------------------------------------------------------- Lines
+
+var LINES_MAX = 200000
+
+// "file2" before "file10", case-insensitive, without Intl (Qt's engine
+// ignores localeCompare's numeric option). Each line gets one key that sorts
+// naturally as a plain string: a run of digits becomes \u0001, its length,
+// then the digits. Sorting those keys with the engine's native sort (no
+// comparator callback) is ~20× faster in Qt's V4 than a JS comparator.
+function naturalKey(s) {
+  return s.toLowerCase().replace(/[\u0000-\u0002]/g, "").replace(/\d+/g, function (d) {
+    d = d.replace(/^0+(?=\d)/, "")
+    return "\u0001" + String.fromCharCode(Math.min(0xffff, 0x20 + d.length)) + d
+  })
+}
+
+function naturalSort(lines) {
+  var w = String(lines.length).length
+  var keyed = lines.map(function (l, i) { return naturalKey(l) + "\u0000" + ("0000000000" + i).slice(-w) })
+  keyed.sort()
+  return keyed.map(function (k) { return lines[Number(k.slice(k.lastIndexOf("\u0000") + 1))] })
+}
+
+function utf8Length(s) {
+  var n = 0
+  for (var i = 0; i < s.length; i++) {
+    var c = s.charCodeAt(i)
+    if (c < 0x80) n += 1
+    else if (c < 0x800) n += 2
+    else if (c >= 0xd800 && c <= 0xdbff && i + 1 < s.length) { n += 4; i++ }
+    else n += 3
+  }
+  return n
+}
+
+function linesTool(input, mode) {
+  if (input === "") return result("", "", "Paste lines to sort, dedupe or count")
+  var trailing = /\n$/.test(input)
+  var lines = (trailing ? input.slice(0, -1) : input).split("\n")
+  if (lines.length > LINES_MAX) return result("", "Too many lines (" + LINES_MAX + " max)")
+  var words = (input.match(/\S+/g) || []).length
+  var unique = {}, uniqueCount = 0
+  lines.forEach(function (l) { if (!Object.prototype.hasOwnProperty.call(unique, "$" + l)) { unique["$" + l] = 0; uniqueCount++ } unique["$" + l]++ })
+  var info = lines.length + " lines · " + uniqueCount + " unique · " + words + " words · " + input.length + " chars · " + utf8Length(input) + " bytes"
+  var out
+  if (mode === "sort" || mode === "sort-desc") {
+    out = naturalSort(lines)
+    if (mode === "sort-desc") out.reverse()
+  } else if (mode === "unique") {
+    var seen = {}
+    out = lines.filter(function (l) { return seen.hasOwnProperty("$" + l) ? false : (seen["$" + l] = true) })
+  } else if (mode === "reverse") out = lines.slice().reverse()
+  else if (mode === "trim") out = lines.map(function (l) { return l.trim() }).filter(function (l) { return l !== "" })
+  else if (mode === "count") {
+    // Frequency table, most common first: the "| sort | uniq -c | sort -rn" of logs.
+    // Ties keep first-appearance order (Qt's sort is not stable).
+    var rows = Object.keys(unique).map(function (k, i) { return [unique[k], k.slice(1), i] })
+    rows.sort(function (a, b) { return b[0] - a[0] || a[2] - b[2] })
+    var w = String(rows.length ? rows[0][0] : 0).length
+    out = rows.map(function (r) { return (new Array(w + 1).join(" ") + r[0]).slice(-w) + "  " + r[1] })
+  } else out = lines
+  return result(out.join("\n"), "", info)
+}
+
+// ---------------------------------------------------------------- ULID
+
+var CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
+
+// 48-bit milliseconds then 80 random bits, Crockford base32. Every ID gets
+// its own secure random bits (the spec's monotonic +1 would make the rest of a
+// batch guessable from the first), and the batch is sorted so it still lists
+// in order.
+function ulids(n, nowMs, bytes) {
+  var out = []
+  for (var i = 0; i < n; i++) {
+    var rand = bytes.slice(i * 16 + 6, i * 16 + 16)
+    var b = [], ms = Math.floor(nowMs)
+    for (var j = 5; j >= 0; j--) { b[j] = ms % 256; ms = Math.floor(ms / 256) }
+    b = b.concat(rand)
+    // 128 bits → 26 characters of 5 bits; the first takes only the top 3.
+    var s = "", acc = 0, accBits = 2
+    for (var x = 0; x < 16; x++) {
+      acc = (acc << 8) | b[x]; accBits += 8
+      while (accBits >= 5) { accBits -= 5; s += CROCKFORD.charAt((acc >> accBits) & 31) }
+      acc &= (1 << accBits) - 1
+    }
+    out.push(s)
+  }
+  return out.sort()
+}
+
 // ---------------------------------------------------------------- Detect
 
 // Best guess at which tool the clipboard content belongs to, or "".
@@ -1032,6 +1778,8 @@ function detect(text) {
   if (s === "" || s.length > DETECT_MAX) return ""
   if (/^(Bearer\s+)?eyJ[A-Za-z0-9_-]*\.eyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]*$/.test(s)) return "jwt"
   if (/^[\[{]/.test(s)) { try { JSON.parse(s); return "json" } catch (e) { if (/^\{\s*"/.test(s)) return "json" } }
+  if (s.length <= 64 && /^(#[0-9A-Fa-f]{3,4}|#[0-9A-Fa-f]{6}|#[0-9A-Fa-f]{8}|(rgba?|hsla?|oklch)\([^()]*\))$/.test(s) && parseColor(s)) return "color"
+  if (/^0[xX][0-9A-Fa-f_]{1,64}$/.test(s) || /^0[bB][01_]{1,256}$/.test(s)) return "number"
   if (/^@(yearly|annually|monthly|weekly|daily|midnight|hourly)$/i.test(s)) return "cron"
   // Five fields with at least one * or /, e.g. "*/5 * * * *" or "0 9 * * MON-FRI".
   if (s.length <= CRON_MAX && /^([\d*?,\/-]+[ \t]+){4}[\dA-Za-z*?,\/-]+$/.test(s) && /[*\/]/.test(s)) return "cron"
@@ -1060,6 +1808,10 @@ function run(toolId, state) {
   case "url": return urlTool(input, state.mode || "encode")
   case "time": return timeTool(input, state.nowMs)
   case "cron": return cronTool(input, state.mode || "local", state.nowMs)
+  case "escape": return escapeTool(input, state.mode || "html")
+  case "number": return numberTool(input, state.mode || "auto")
+  case "color": return colorTool(input)
+  case "lines": return linesTool(input, state.mode || "sort")
   case "uuid": return uuidTool(state.mode || "v4", state.count, state.nowMs, state.randomBytes, state.upper)
   case "password": return passwordTool(state, state.randomBytes)
   case "case": return caseTool(input)

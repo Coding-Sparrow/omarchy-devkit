@@ -1,8 +1,9 @@
 # DevKit for Omarchy
 
 The developer tools you reach for every day, one click away on the Omarchy bar:
-JSON, JWT, Base64, URL, timestamps, UUIDs, passwords, hashes, case conversion,
-regex, text diff and cron. It opens as a floating window. Do the job, press `Esc`, and
+JSON (and JSON to YAML, TypeScript or CSV), JWT, Base64, URL, escaping,
+timestamps, cron, UUIDs and ULIDs, passwords, hashes, colours, number bases,
+case conversion, regex, line tools and text diff. It opens as a floating window. Do the job, press `Esc`, and
 you're back.
 
 ![DevKit decoding a JWT](preview.png)
@@ -20,18 +21,22 @@ secrets stay out of clipboard history.
 
 | Key | Tool | What it does |
 | --- | --- | --- |
-| `Ctrl+1` | **JSON** | Format (2/4 spaces), minify, sort keys, validate with line/column errors |
+| `Ctrl+1` | **JSON** | Format (2/4 spaces), minify, sort keys, validate with line/column errors. Convert to YAML (quotes `yes`/`no`/`on` so YAML 1.1 readers don't turn them into booleans), TypeScript interfaces (optional and nullable fields inferred from every array element, identical shapes shared), and CSV both ways (delimiter sniffed, `00123` stays a string) |
 | `Ctrl+2` | **JWT Decoder** | Header, payload, `iat`/`nbf`/`exp` as dates, EXPIRED badge. The signature is *not* verified |
 | `Ctrl+3` | **Base64** | Encode, decode, URL-safe. Full UTF-8; binary is shown as hex |
 | `Ctrl+4` | **URL** | Encode/decode components; parse a URL into host, port, path and query params |
 | `Ctrl+5` | **Timestamp** | Epoch in s/ms/µs/ns ⇄ ISO, local, RFC 2822, relative. Empty input shows a live "now" |
-| `Ctrl+6` | **UUID** | v4 and v7, up to 500 at a time, optional uppercase. Only CSPRNG bytes (Python `secrets`), never `Math.random()` |
+| `Ctrl+6` | **UUID** | v4, v7 and ULID, up to 500 at a time, optional uppercase. Only CSPRNG bytes (Python `secrets`), never `Math.random()`. A ULID batch is sorted, and every ULID has its own random bits |
 | `Ctrl+7` | **Hash** | MD5, SHA-1, SHA-256, SHA-512 |
 | `Ctrl+8` | **Case Converter** | camel, Pascal, snake, SCREAMING, kebab, Train, dot, path, Title… |
 | `Ctrl+9` | **Regex Tester** | JS regex matches, numbered and named groups, replace with `$1` or `$<name>`. Runs in a separate process with a 1.5 s deadline |
 | `Ctrl+0` | **Text Diff** | Line diff of two texts |
 | `Ctrl+⇧P` | **Password Generator** | Length, count, upper/lower/digits/special sets and a comma-separated exclude list. CSPRNG-only, one character from each selected set. The letter sets skip `I`/`l`. Results under 60 bits are flagged as weak |
 | `Ctrl+⇧R` | **Cron** | Explains a 5-field cron expression in plain English and lists the next 10 runs, in local time or UTC. Names (`MON-FRI`, `JAN`), steps, ranges, `@daily`-style macros and pasted crontab lines. Presets to start from |
+| `Ctrl+⇧E` | **Escape** | HTML entities both ways (named, decimal, hex), string escape/unescape for JSON, JS, Go and Rust (`\n`, `\u{1F600}`, `\x41`…), and POSIX shell quoting |
+| `Ctrl+⇧N` | **Number Base** | Decimal, hex, octal and binary, exact at any size (a 256-bit hash converts digit for digit). Two's complement at 8/16/32/64 bits, the signed reading of a value, and its Unicode character |
+| `Ctrl+⇧O` | **Color** | HEX, RGB, HSL, HSV, OKLCH, Hyprland `rgba(…)`, Qt/Android `#AARRGGBB` and CSS names, both ways. Live swatch with alpha, and WCAG contrast on white and black |
+| `Ctrl+⇧L` | **Lines** | Natural sort (`file2` before `file10`), reverse sort, unique, count (like `sort \| uniq -c \| sort -rn`), reverse and trim. Always shows lines, unique lines, words, characters and bytes |
 
 ## Screenshots
 
@@ -43,6 +48,8 @@ secrets stay out of clipboard history.
 | **Hash**<br>![Hash](screenshots/07-hash.png) | **Case converter**<br>![Case](screenshots/08-case.png) |
 | **Regex tester** with named groups<br>![Regex](screenshots/09-regex.png) | **Text diff**<br>![Diff](screenshots/10-diff.png) |
 | **Password generator**<br>![Password](screenshots/11-password.png) | **Cron**, explained with its next runs<br>![Cron](screenshots/12-cron.png) |
+| **Color**, every format plus contrast<br>![Color](screenshots/13-color.png) | **JSON → TypeScript**<br>![JSON to TypeScript](screenshots/14-json-ts.png) |
+| **Number base**, exact with two's complement<br>![Number base](screenshots/15-number.png) | **Lines**, counting repeated log lines<br>![Lines](screenshots/16-lines.png) |
 
 ## Requirements
 
@@ -83,7 +90,8 @@ omarchy plugin enable coding-sparrow.devkit
 - Press **`Esc`** to close.
 
 When DevKit opens, it checks the clipboard. If the content looks like a JWT,
-JSON, Base64, a URL, a timestamp or a cron expression, a banner offers to load it (`Ctrl+D`).
+JSON, Base64, a URL, a timestamp, a cron expression, a colour or a `0x`/`0b`
+number, a banner offers to load it (`Ctrl+D`).
 Click any row in the Hash, Case or Timestamp output to copy that value.
 
 | Key | Action |
@@ -92,6 +100,7 @@ Click any row in the Hash, Case or Timestamp output to copy that value.
 | `Ctrl+Tab` / `Ctrl+Shift+Tab` | Next / previous tool |
 | `Ctrl+Shift+P` | Jump to the Password Generator |
 | `Ctrl+Shift+R` | Jump to Cron |
+| `Ctrl+Shift+E` / `N` / `O` / `L` | Jump to Escape / Number Base / Color / Lines |
 | `Ctrl+Shift+V` | Paste the clipboard into the input |
 | `Ctrl+Shift+C` | Copy the output |
 | `Ctrl+Enter` | Make the output the input (chain, e.g. Base64 → JSON); regenerate in UUID and Password |
@@ -136,8 +145,9 @@ omarchy-shell shell summon coding-sparrow.devkit '{"action":"clipboard"}'
 ```
 
 Payload fields: `tool` (`json`, `jwt`, `base64`, `url`, `time`, `uuid`,
-`password`, `hash`, `case`, `regex`, `diff`, `cron`), `mode` (for example
-`minify`, `decode`, `parse`, `v7` or `utc`), `input`, `input2` (the diff's second text),
+`password`, `hash`, `case`, `regex`, `diff`, `cron`, `escape`, `number`,
+`color`, `lines`), `mode` (for example `minify`, `yaml`, `ts`, `decode`,
+`parse`, `v7`, `ulid`, `utc`, `shell` or `count`), `input`, `input2` (the diff's second text),
 `pattern`, `flags`, `replacement`, `length` (password length), `count` (UUIDs
 or passwords), and `action: "clipboard"`.
 
@@ -176,8 +186,9 @@ from `~/.config/hypr/bindings.lua` yourself.
 - **Regexes never run in the shell.** Your pattern runs in a separate `qml`
   process (the same V4 engine and `Tools.js`, so results are identical). It is
   killed after 1.5 s, so a catastrophic pattern such as `(a+)+$` cannot freeze
-  the desktop shell. Everything else is linear-time and size-capped; see
-  `tests/perf.test.mjs`.
+  the desktop shell. Everything else is linear-time or near it, and
+  size-capped. `tests/perf-cases.js` holds the worst cases, which run in both
+  node and Qt's own V4 engine.
 - **UUIDs and passwords use only secure randomness.** Every byte comes from
   Python's `secrets`. If the pool runs short, generation waits for more bytes.
   There is no `Math.random()` fallback. Passwords draw with rejection sampling
@@ -231,7 +242,7 @@ copy. Then:
 
 ```bash
 omarchy plugin enable coding-sparrow.devkit
-tests/run                    # tool logic, worst-case timing, and helpers (needs node)
+tests/run                    # tool logic, worst-case timing in node and Qt's V4, and helpers (needs node)
 omarchy restart shell        # load QML edits
 ```
 

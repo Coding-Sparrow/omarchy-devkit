@@ -2,13 +2,13 @@
   "schemaVersion": 1,
   "id": "coding-sparrow.devkit",
   "name": "DevKit",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "author": "Coding-Sparrow",
   "license": "MIT",
-  "description": "Everyday developer tools in a floating window: JSON, JWT, Base64, URL, timestamps, UUIDs, passwords, hashes, case, regex, diff and cron. Offline.",
+  "description": "Everyday developer tools in a floating window: JSON (to YAML, TypeScript and CSV), JWT, Base64, URL, escaping, timestamps, cron, UUIDs and ULIDs, passwords, hashes, colours, number bases, case, regex, line tools and diff. Offline.",
   "homepage": "https://github.com/Coding-Sparrow/omarchy-devkit",
   "repository": "https://github.com/Coding-Sparrow/omarchy-devkit",
-  "keywords": ["developer", "json", "jwt", "base64", "uuid", "password", "regex", "diff", "cron", "devtoys"],
+  "keywords": ["developer", "json", "jwt", "base64", "uuid", "password", "regex", "diff", "cron", "yaml", "color", "devtoys"],
   "kinds": ["panel", "bar-widget"],
   "keepLoaded": true,
   "entryPoints": {
@@ -19,7 +19,7 @@
     "displayName": "DevKit",
     "description": "Open everyday developer tools",
     "category": "Developer Tools",
-    "aliases": ["json", "jwt", "base64", "uuid", "password", "cron", "devtoys", "decode"],
+    "aliases": ["json", "jwt", "base64", "uuid", "password", "cron", "yaml", "color", "devtoys", "decode"],
     "allowMultiple": false,
     "defaultSection": "right"
   }

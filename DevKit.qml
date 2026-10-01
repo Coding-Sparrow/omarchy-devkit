@@ -55,6 +55,7 @@ Item {
   property string infoText: ""
   property bool infoUrgent: false
   property var outPairs: []
+  property var swatch: null            // Color tool: { r, g, b, a, dark } in 0..1
   property var diffRows: []
 
   // ---- clipboard hint
@@ -270,6 +271,7 @@ Item {
     infoUrgent = r.urgent === true
     outPairs = r.pairs || []
     diffRows = r.rows || []
+    swatch = r.swatch || null
   }
 
   function compute() {
@@ -697,7 +699,8 @@ Item {
             color: root.dim
             font.pixelSize: Style.font.caption
             lineHeight: 1.25
-            text: "Ctrl+1…0   switch tool\nCtrl+Tab   next tool\nCtrl+⇧P    passwords\nCtrl+⇧R    cron\nCtrl+⇧V    paste input\nCtrl+⇧C    copy output\nCtrl+↵     output → input\nCtrl+L     clear\nEsc        close"
+            // Tools past Ctrl+0 show their own key (Ctrl+⇧…) on hover.
+            text: "Ctrl+1…0   switch tool\nCtrl+⇧V/C  paste / copy\nCtrl+↵     output → input\nCtrl+L     clear · Esc close"
           }
         }
 
@@ -757,7 +760,7 @@ Item {
           RowLayout {
             Layout.fillWidth: true
             spacing: Style.spacing.md
-            visible: root.tool.modes.length > 0 || root.toolId === "regex" || root.toolId === "time" || root.toolId === "password"
+            visible: root.tool.modes.length > 0 || root.toolId === "regex" || root.toolId === "time" || root.toolId === "password" || root.toolId === "color"
 
             ButtonGroup {
               visible: root.tool.modes.length > 0
@@ -844,7 +847,8 @@ Item {
               onTextChanged: if (root.toolId === "uuid" || root.toolId === "password") root.compute()
             }
             Button {
-              visible: root.toolId === "uuid"
+              // ULIDs are uppercase by definition.
+              visible: root.toolId === "uuid" && root.mode !== "ulid"
               text: "UPPER"
               bordered: true
               selected: root.upper
@@ -861,6 +865,45 @@ Item {
               foreground: root.foreground
               accent: root.accent
               onClicked: root.compute()
+            }
+
+            // color: the colour itself, with white and black text on it
+            Rectangle {
+              visible: root.toolId === "color"
+              Layout.fillWidth: true
+              implicitHeight: generateButton.implicitHeight
+              radius: Style.cornerRadius
+              border.width: 1
+              border.color: root.faint
+              // A checkerboard under translucent colours shows the alpha.
+              Grid {
+                anchors.fill: parent
+                anchors.margins: 1
+                clip: true
+                visible: root.swatch !== null && root.swatch.a < 1
+                columns: Math.ceil(width / 8)
+                Repeater {
+                  model: parent.visible ? parent.columns * Math.ceil(parent.height / 8) : 0
+                  Rectangle {
+                    required property int index
+                    width: 8; height: 8
+                    color: (Math.floor(index / parent.columns) + index % parent.columns) % 2 ? "#bbbbbb" : "#ffffff"
+                  }
+                }
+              }
+              Rectangle {
+                anchors.fill: parent
+                anchors.margins: 1
+                radius: Style.cornerRadius
+                color: root.swatch ? Qt.rgba(root.swatch.r, root.swatch.g, root.swatch.b, root.swatch.a) : "transparent"
+                Row {
+                  anchors.centerIn: parent
+                  spacing: Style.space(40)
+                  visible: root.swatch !== null
+                  PlainText { text: "White text"; color: "#ffffff"; font.bold: true }
+                  PlainText { text: "Black text"; color: "#000000"; font.bold: true }
+                }
+              }
             }
 
             // time
@@ -1165,7 +1208,9 @@ Item {
           anchors.rightMargin: Style.spacing.md
           anchors.verticalCenter: parent.verticalCenter
           text: row.modelData[1]
-          wrapMode: Text.WrapAnywhere
+          // Break at spaces when possible (binary groups, descriptions), and
+          // anywhere for long unbroken values such as tokens.
+          wrapMode: Text.Wrap
         }
         PlainText {
           id: copyHint
