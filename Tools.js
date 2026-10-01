@@ -57,7 +57,11 @@ var TOOLS = [
     shortcut: "Ctrl+Shift+L",
     modes: [{ value: "sort", label: "Sort" }, { value: "sort-desc", label: "Sort ↓" }, { value: "unique", label: "Unique" },
             { value: "count", label: "Count" }, { value: "reverse", label: "Reverse" }, { value: "trim", label: "Trim" }],
-    placeholder: "One item per line…" }
+    placeholder: "One item per line…" },
+  { id: "markdown", badge: "MD", name: "Markdown", description: "Live GitHub-flavoured preview, and Markdown to HTML",
+    shortcut: "Ctrl+Shift+M",
+    modes: [{ value: "preview", label: "Preview" }, { value: "html", label: "HTML" }],
+    placeholder: "# Paste Markdown…" }
 ]
 
 function toolById(id) {
@@ -1768,6 +1772,275 @@ function ulids(n, nowMs, bytes) {
   return out.sort()
 }
 
+// ---------------------------------------------------------------- Markdown
+
+// GitHub-flavoured Markdown to the HTML subset Qt's rich text understands.
+// Written here rather than using Qt's own Markdown support because that one
+// passes raw HTML through and fetches remote images; this renderer escapes
+// all text, shows raw HTML literally and never loads an image, so previewing
+// a pasted README makes no network request.
+var MARKDOWN_MAX = 131072
+
+function mdEscape(s) {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;")
+}
+
+// Only links a browser should open; anything else (javascript:, file:…) loses its href.
+function mdSafeUrl(url) {
+  var u = url.trim()
+  if (/^(https?:|mailto:)/i.test(u)) return u
+  return /^[a-z][\w+.-]*:/i.test(u) ? "" : u   // relative links are fine; other schemes are not
+}
+
+function mdInline(text, st) {
+  var slots = []
+  function keep(html) { slots.push(html); return "\u0000" + (slots.length - 1) + "\u0000" }
+  var s = text.replace(/\u0000/g, "")
+  // Code spans first: nothing inside them is Markdown.
+  // Every span below is length-bounded: an opener with no closer would
+  // otherwise rescan the rest of the paragraph, which is quadratic.
+  s = s.replace(/(`+)([\s\S]{0,1000}?[^`])\1(?!`)/g, function (m, ticks, code) {
+    return keep("<code" + st.code + ">" + mdEscape(code.replace(/^ (.*) $/, "$1")) + "</code>")
+  })
+  // Backslash escapes.
+  s = s.replace(/\\([\\`*_{}\[\]()#+\-.!|~<>])/g, function (m, c) { return keep(mdEscape(c)) })
+  // Images become their alt text: an <img> would make Qt load the URL.
+  s = s.replace(/!\[([^\]]{0,500})\]\(([^)\s]{0,2000})(?:\s+"[^"]{0,200}")?\)/g, function (m, alt) {
+    return keep("<span" + st.dim + ">[image: " + mdEscape(alt || "untitled") + "]</span>")
+  })
+  s = s.replace(/\[([^\]]{1,500})\]\(([^)\s]{0,2000})(?:\s+"([^"]{0,200})")?\)/g, function (m, label, url) {
+    var safe = mdSafeUrl(url)
+    var inner = mdInline(label, st)
+    return keep(safe ? "<a href=\"" + mdEscape(safe) + "\"" + st.link + ">" + inner + "</a>" : inner)
+  })
+  s = s.replace(/<(https?:\/\/[^\s<>]+|mailto:[^\s<>]+)>/g, function (m, url) {
+    return keep("<a href=\"" + mdEscape(url) + "\"" + st.link + ">" + mdEscape(url) + "</a>")
+  })
+  s = s.replace(/(^|[\s(])(https?:\/\/[^\s<>()]+[^\s<>().,;:!?'"])/g, function (m, pre, url) {
+    return pre + keep("<a href=\"" + mdEscape(url) + "\"" + st.link + ">" + mdEscape(url) + "</a>")
+  })
+  s = mdEscape(s)
+  s = s.replace(/(\*\*|__)(?=\S)([\s\S]{0,300}?\S)\1/g, "<b>$2</b>")
+  s = s.replace(/(^|[^\w*])\*(?=\S)([^*]{0,300}?\S)\*(?!\*)/g, "$1<i>$2</i>")
+  s = s.replace(/(^|[^\w])_(?=\S)([^_]{0,300}?\S)_(?![\w])/g, "$1<i>$2</i>")
+  s = s.replace(/~~(?=\S)([\s\S]{0,300}?\S)~~/g, "<s>$1</s>")
+  // Hard breaks: two trailing spaces or a backslash before a newline.
+  s = s.replace(/( {2,}|\\)\n/g, "<br>").replace(/\n/g, " ")
+  return s.replace(/\u0000(\d+)\u0000/g, function (m, i) { return slots[Number(i)] })
+}
+
+function mdTableCells(line) {
+  var s = line.trim().replace(/^\|/, "").replace(/\|$/, "")
+  var cells = [], cell = "", inCode = false
+  for (var i = 0; i < s.length; i++) {
+    var c = s.charAt(i)
+    if (c === "\\" && s.charAt(i + 1) === "|") { cell += "|"; i++; continue }
+    if (c === "`") inCode = !inCode
+    if (c === "|" && !inCode) { cells.push(cell.trim()); cell = ""; continue }
+    cell += c
+  }
+  cells.push(cell.trim())
+  return cells
+}
+
+var MD_LIST = /^( {0,3})([-*+]|\d{1,9}[.)])( +|$)(.*)$/
+var MD_FENCE = /^ {0,3}(`{3,}|~{3,})\s*([^`\s]*)[^`]*$/
+var MD_HR = /^ {0,3}([-*_])( *\1){2,} *$/
+var MD_TABLE_SEP = /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/
+
+function mdBlocks(lines, st, depth) {
+  var out = [], i = 0, para = []
+  function flush() {
+    if (para.length) out.push("<p>" + mdInline(para.join("\n"), st) + "</p>")
+    para = []
+  }
+  while (i < lines.length) {
+    var line = lines[i], m
+    if (/^\s*$/.test(line)) { flush(); i++; continue }
+    if ((m = MD_FENCE.exec(line))) {
+      flush()
+      var fence = m[1], code = []
+      i++
+      while (i < lines.length && !(new RegExp("^ {0,3}" + fence.charAt(0) + "{" + fence.length + ",}\\s*$")).test(lines[i])) code.push(lines[i++])
+      i++
+      out.push((m[2] ? "<p" + st.dim + "><small>" + mdEscape(m[2]) + "</small></p>" : "")
+        + "<pre" + st.pre + ">" + mdEscape(code.join("\n")) + "</pre>")
+      continue
+    }
+    if ((m = /^ {0,3}(#{1,6})\s+(.*?)(\s+#+)?\s*$/.exec(line)) || /^ {0,3}#{1,6}$/.test(line)) {
+      flush()
+      var level = m ? m[1].length : line.trim().length
+      out.push("<h" + level + st.heading + ">" + mdInline(m ? m[2] : "", st) + "</h" + level + ">")
+      i++
+      continue
+    }
+    if (MD_HR.test(line) && !(para.length && /^ {0,3}-+ *$/.test(line))) { flush(); out.push("<hr>"); i++; continue }
+    // Setext headings: a paragraph line underlined with === or ---.
+    if (para.length === 1 && /^ {0,3}(=+|-+) *$/.test(line)) {
+      var lvl = line.trim().charAt(0) === "=" ? 1 : 2
+      out.push("<h" + lvl + st.heading + ">" + mdInline(para[0], st) + "</h" + lvl + ">")
+      para = []
+      i++
+      continue
+    }
+    if (line.indexOf("|") !== -1 && i + 1 < lines.length && MD_TABLE_SEP.test(lines[i + 1]) && lines[i + 1].indexOf("-") !== -1) {
+      flush()
+      var head = mdTableCells(line)
+      var aligns = mdTableCells(lines[i + 1]).map(function (c) {
+        return /^:-+:$/.test(c) ? "center" : /-+:$/.test(c) ? "right" : "left"
+      })
+      var rows = []
+      i += 2
+      while (i < lines.length && lines[i].indexOf("|") !== -1 && !/^\s*$/.test(lines[i])) rows.push(mdTableCells(lines[i++]))
+      var cell = function (tag, text, k) {
+        return "<" + tag + " align=\"" + (aligns[k] || "left") + "\"" + st.cell + ">" + mdInline(text || "", st) + "</" + tag + ">"
+      }
+      out.push("<table" + st.table + "><tr>" + head.map(function (h, k) { return cell("th", h, k) }).join("") + "</tr>"
+        + rows.map(function (r) { return "<tr>" + head.map(function (h, k) { return cell("td", r[k], k) }).join("") + "</tr>" }).join("")
+        + "</table>")
+      continue
+    }
+    if (/^ {0,3}>/.test(line)) {
+      flush()
+      var quote = []
+      while (i < lines.length && /^ {0,3}>/.test(lines[i])) quote.push(lines[i++].replace(/^ {0,3}> ?/, ""))
+      out.push(depth > 20 ? "<p>" + mdEscape(quote.join(" ")) + "</p>"
+        : "<blockquote" + st.quote + ">" + mdBlocks(quote, st, depth + 1) + "</blockquote>")
+      continue
+    }
+    if ((m = MD_LIST.exec(line)) && (!para.length || m[4] !== "")) {
+      flush()
+      var ordered = /\d/.test(m[2]), start = ordered ? parseInt(m[2], 10) : 1
+      var items = []
+      while (i < lines.length) {
+        var lm = MD_LIST.exec(lines[i])
+        if (!lm || /\d/.test(lm[2]) !== ordered) break
+        var indent = lm[1].length + lm[2].length + Math.max(1, Math.min(4, lm[3].length))
+        var body = [lm[4]]
+        i++
+        // Continuation: indented lines, and blank lines followed by indented ones.
+        while (i < lines.length) {
+          if (/^\s*$/.test(lines[i])) {
+            if (i + 1 < lines.length && /^\s+\S/.test(lines[i + 1]) && lines[i + 1].search(/\S/) >= indent) { body.push(""); i++; continue }
+            break
+          }
+          if (lines[i].search(/\S/) >= indent) { body.push(lines[i].slice(indent)); i++; continue }
+          if (MD_LIST.exec(lines[i]) || MD_FENCE.test(lines[i]) || /^ {0,3}(#|>)/.test(lines[i]) || MD_HR.test(lines[i])) break
+          body.push(lines[i].trim()); i++ // lazy continuation of the item's paragraph
+        }
+        items.push(body)
+        while (i < lines.length && /^\s*$/.test(lines[i]) && i + 1 < lines.length && MD_LIST.exec(lines[i + 1])) i++
+      }
+      var html = items.map(function (body) {
+        var task = /^\[([ xX])\]\s+/.exec(body[0])
+        if (task) body[0] = body[0].slice(task[0].length)
+        var inner = depth > 20 ? mdEscape(body.join(" ")) : mdBlocks(body, st, depth + 1)
+        // A single paragraph renders inline, so tight lists stay tight.
+        inner = inner.replace(/^<p>([\s\S]*?)<\/p>/, "$1")
+        return "<li>" + (task ? (task[1] === " " ? "☐ " : "☑ ") : "") + inner + "</li>"
+      }).join("")
+      out.push(ordered ? "<ol" + (start !== 1 ? " start=\"" + start + "\"" : "") + ">" + html + "</ol>" : "<ul>" + html + "</ul>")
+      continue
+    }
+    para.push(line.replace(/^ +/, ""))
+    i++
+  }
+  flush()
+  return out.join("\n")
+}
+
+// theme: colours for the in-window preview; without it, plain HTML to copy.
+function markdownHtml(input, theme) {
+  var t = theme || null
+  var st = t ? {
+    code: " style=\"font-family: monospace; background-color: " + t.code + ";\"",
+    pre: " style=\"font-family: monospace; background-color: " + t.code + ";\"",
+    dim: " style=\"color: " + t.dim + ";\"",
+    link: " style=\"color: " + t.accent + ";\"",
+    heading: " style=\"color: " + t.accent + ";\"",
+    quote: " style=\"color: " + t.dim + ";\"",
+    table: " border=\"1\" cellspacing=\"0\" cellpadding=\"6\" style=\"border-color: " + t.border + "; border-style: solid;\"",
+    cell: ""
+  } : { code: "", pre: "", dim: "", link: "", heading: "", quote: "", table: "", cell: "" }
+  return mdBlocks(input.replace(/\r\n?/g, "\n").replace(/\t/g, "    ").split("\n"), st, 0)
+}
+
+function markdownTool(input, mode, theme) {
+  if (input.trim() === "") return result("", "", "Paste Markdown, or load the sample")
+  if (input.length > MARKDOWN_MAX) return result("", "Too long to preview (128 KiB max)")
+  var html = markdownHtml(input, null)
+  var words = (input.match(/\S+/g) || []).length
+  var r = result(html, "", words + " words · " + Math.max(1, Math.round(words / 230)) + " min read")
+  if (mode !== "html") r.html = markdownHtml(input, theme)
+  return r
+}
+
+// ---------------------------------------------------------------- Samples
+
+// One example per tool (and per mode where the input differs), for the
+// Sample button. Generators (UUID, Password) take no input, so have none.
+var SAMPLE_JWT = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9."
+  + "eyJzdWIiOiJ1c2VyXzEwNDIiLCJuYW1lIjoiQWRhIExvdmVsYWNlIiwicm9sZSI6ImFkbWluIiwiaWF0IjoxNzAwMDAwMDAwLCJleHAiOjE3MDAwMDM2MDB9."
+  + "Y3r2aHutsUDQjWdbJchEZCADalebiWojzScrMz7bl8s"
+
+var SAMPLE_ORDER = '{"id":"ord_1042","total":59.9,"paid":true,"customer":{"name":"Ada Lovelace","email":null},'
+  + '"items":[{"sku":"KB-01","qty":1,"price":49.9},{"sku":"CB-USB","qty":2,"price":5,"gift":true}],"shipped-at":"2024-05-01T10:00:00Z"}'
+
+var SAMPLES = {
+  json: {
+    "*": { input: SAMPLE_ORDER },
+    csv: { input: '[{"name":"Ada","role":"admin","teams":["core"]},{"name":"Linus","role":"dev, ops"},{"name":"Grace","role":"dev","active":false}]' },
+    "from-csv": { input: 'name,age,zip,active\n"Lovelace, Ada",36,00123,true\nGrace Hopper,85,10001,false\nLinus,,,true' }
+  },
+  jwt: { "*": { input: SAMPLE_JWT } },
+  base64: {
+    "*": { input: "Hello, Omarchy! 👋 DevKit works offline." },
+    decode: { input: "eyJ1c2VyIjoiYWRhIiwicm9sZXMiOlsiYWRtaW4iLCJkZXYiXSwiZW1vamkiOiLwn5qAIn0=" }
+  },
+  url: {
+    "*": { input: "name=Ada Lovelace & friends / 100% café?" },
+    decode: { input: "q%3Dhello%20world%26lang%3Den%26emoji%3D%F0%9F%91%8B" },
+    parse: { input: "https://ada@api.example.com:8443/v1/search?q=omarchy&tags=dev,tools&page=2#results" }
+  },
+  time: { "*": { input: "1700000000" } },
+  hash: { "*": { input: "The quick brown fox jumps over the lazy dog" } },
+  "case": { "*": { input: "user account ID" } },
+  regex: { "*": { input: "Contact ada@example.com or grace.hopper@navy.mil, not bob@localhost.",
+                  pattern: "(?<user>[\\w.]+)@(?<domain>[\\w-]+\\.[\\w.]+)", flags: "g",
+                  replacement: "$<user> at $<domain>" } },
+  diff: { "*": { input: "server:\n  port: 8080\n  host: localhost\nlog_level: info\nfeatures:\n  - search\n  - export",
+                 input2: "server:\n  port: 9090\n  host: localhost\nlog_level: debug\nfeatures:\n  - search\n  - export\n  - sharing" } },
+  cron: { "*": { input: "*/15 9-17 * * 1-5" } },
+  escape: {
+    "*": { input: "<a href=\"/search?q=tom&jerry\">Tom & Jerry's</a>" },
+    "html-decode": { input: "&lt;p class=&quot;note&quot;&gt;Caf&eacute; &amp; cr&egrave;me &#x1F600;&lt;/p&gt;" },
+    escape: { input: "He said \"hi\"\n\tthen left \\o/" },
+    unescape: { input: "\"Line 1\\nLine 2\\t\\u00e9 \\u{1F600} \\x41\"" },
+    shell: { input: "it's a file with spaces & $vars.txt" }
+  },
+  number: {
+    "*": { input: "0xDEADBEEF" },
+    dec: { input: "4294967295" }, hex: { input: "7fffffff" }, oct: { input: "755" }, bin: { input: "1010_1010" }
+  },
+  color: { "*": { input: "#7aa2f7" } },
+  lines: { "*": { input: "GET /api/users 200\nGET /api/users 200\nPOST /api/login 401\nGET /health 200\nGET /api/users 200\n"
+                         + "POST /api/login 401\nGET /api/orders 500\nGET /api/users 200\nGET /health 200" } },
+  markdown: { "*": { input: "# DevKit notes\n\nEveryday tools, **offline**, one key away. See [the repo](https://github.com/Coding-Sparrow/omarchy-devkit).\n\n"
+    + "## Checklist\n\n- [x] Format JSON\n- [x] Decode a JWT\n- [ ] Write the *release* notes\n  - nested item with `inline code`\n\n"
+    + "| Tool | Key | Offline |\n| --- | :---: | ---: |\n| JSON | `Ctrl+1` | ✓ |\n| Cron | `Ctrl+⇧R` | ✓ |\n\n"
+    + "> Tip: press **Esc** to close.\n\n```bash\nomarchy plugin update coding-sparrow.devkit\nomarchy restart shell\n```\n\n"
+    + "1. Paste\n2. Read\n3. ~~Struggle~~ Ship\n\n---\n\n![a screenshot](https://example.com/shot.png) is shown as text, never loaded." } }
+}
+
+function sample(toolId, mode) {
+  var s = SAMPLES[toolId]
+  if (!s) return null
+  var pick = s[mode] || s["*"]
+  var out = {}
+  for (var k in pick) out[k] = pick[k]
+  return out
+}
+
 // ---------------------------------------------------------------- Detect
 
 // Best guess at which tool the clipboard content belongs to, or "".
@@ -1779,6 +2052,8 @@ function detect(text) {
   if (/^(Bearer\s+)?eyJ[A-Za-z0-9_-]*\.eyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]*$/.test(s)) return "jwt"
   if (/^[\[{]/.test(s)) { try { JSON.parse(s); return "json" } catch (e) { if (/^\{\s*"/.test(s)) return "json" } }
   if (s.length <= 64 && /^(#[0-9A-Fa-f]{3,4}|#[0-9A-Fa-f]{6}|#[0-9A-Fa-f]{8}|(rgba?|hsla?|oklch)\([^()]*\))$/.test(s) && parseColor(s)) return "color"
+  // A heading, then more lines with list, link, emphasis or code markup.
+  if (s.length <= MARKDOWN_MAX && /^#{1,3} \S/.test(s) && /\n/.test(s) && /(^|\n)([-*] |\d+\. |```|> )|\]\(|\*\*|`/.test(s)) return "markdown"
   if (/^0[xX][0-9A-Fa-f_]{1,64}$/.test(s) || /^0[bB][01_]{1,256}$/.test(s)) return "number"
   if (/^@(yearly|annually|monthly|weekly|daily|midnight|hourly)$/i.test(s)) return "cron"
   // Five fields with at least one * or /, e.g. "*/5 * * * *" or "0 9 * * MON-FRI".
@@ -1812,6 +2087,7 @@ function run(toolId, state) {
   case "number": return numberTool(input, state.mode || "auto")
   case "color": return colorTool(input)
   case "lines": return linesTool(input, state.mode || "sort")
+  case "markdown": return markdownTool(input, state.mode || "preview", state.theme)
   case "uuid": return uuidTool(state.mode || "v4", state.count, state.nowMs, state.randomBytes, state.upper)
   case "password": return passwordTool(state, state.randomBytes)
   case "case": return caseTool(input)

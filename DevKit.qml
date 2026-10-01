@@ -56,6 +56,8 @@ Item {
   property bool infoUrgent: false
   property var outPairs: []
   property var swatch: null            // Color tool: { r, g, b, a, dark } in 0..1
+  property string outHtml: ""          // Markdown preview (escaped by Tools.markdownHtml)
+  property var preSample: null         // the user's fields before Sample, to restore
   property var diffRows: []
 
   // ---- clipboard hint
@@ -106,6 +108,7 @@ Item {
     if (payload.flags !== undefined) flagsField.text = String(payload.flags)
     if (payload.replacement !== undefined) { replField.text = String(payload.replacement); useReplace = true }
     restoring = wasRestoring
+    if (payload.sample === true) { loadSample(); payload.tool = payload.tool || toolId }
     if (payload.tool || payload.mode || payload.input !== undefined || payload.input2 !== undefined
         || payload.count !== undefined || payload.length !== undefined || payload.pattern !== undefined
         || payload.flags !== undefined || payload.replacement !== undefined) compute()
@@ -131,7 +134,8 @@ Item {
     else if (toolId === "uuid" || toolId === "password") generateButton.forceActiveFocus()
     else {
       inputEd.area.forceActiveFocus()
-      inputEd.area.cursorPosition = inputEd.area.length
+      // A freshly loaded sample is read from the top.
+      inputEd.area.cursorPosition = sampleShown ? 0 : inputEd.area.length
     }
   }
 
@@ -272,6 +276,7 @@ Item {
     outPairs = r.pairs || []
     diffRows = r.rows || []
     swatch = r.swatch || null
+    outHtml = r.html || ""
   }
 
   function compute() {
@@ -281,10 +286,57 @@ Item {
     if (toolId === "uuid") { computeUuid(); return }
     if (toolId === "password") { computePassword(); return }
     if (toolId === "regex") { computeRegex(); return }
+    // A long Markdown document re-renders once typing pauses, not per key.
+    if (toolId === "markdown" && inputEd.text.length > 16384 && !markdownDebounce.firing) { markdownDebounce.restart(); return }
     applyResult(Tools.run(toolId, {
       input: inputEd.text, input2: input2Ed.text, mode: mode,
-      nowMs: Date.now()
+      nowMs: Date.now(), theme: toolId === "markdown" ? markdownTheme() : null
     }))
+  }
+
+  // Opaque theme colours for the Markdown preview's inline styles.
+  function hexColor(c) {
+    function h(v) { return ("0" + Math.round(v * 255).toString(16)).slice(-2) }
+    return "#" + h(c.r) + h(c.g) + h(c.b)
+  }
+  function markdownTheme() {
+    function mix(a) { return hexColor(Qt.tint(root.background, Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, a))) }
+    return { accent: hexColor(root.accent), dim: mix(0.6), code: mix(0.09), border: mix(0.25) }
+  }
+
+  // ------------------------------------------------------------ samples
+
+  readonly property bool hasSample: Tools.sample(toolId, mode) !== null
+  // True while the sample is still what's in the input, so the button can
+  // offer to put the user's own text back.
+  readonly property bool sampleShown: preSample !== null && preSample.tool === toolId && inputEd.text === preSample.sampleInput
+
+  function loadSample() {
+    if (sampleShown) {
+      var p = preSample
+      preSample = null
+      restoring = true
+      inputEd.text = p.input; input2Ed.text = p.input2
+      patternField.text = p.pattern; flagsField.text = p.flags; replField.text = p.replacement
+      useReplace = p.useReplace
+      restoring = false
+      compute()
+      flash("Your input is back")
+      return
+    }
+    var s = Tools.sample(toolId, mode)
+    if (!s) return
+    preSample = { tool: toolId, input: inputEd.text, input2: input2Ed.text, pattern: patternField.text,
+                  flags: flagsField.text, replacement: replField.text, useReplace: useReplace, sampleInput: s.input }
+    restoring = true
+    inputEd.text = s.input
+    if (s.input2 !== undefined) input2Ed.text = s.input2
+    if (s.pattern !== undefined) patternField.text = s.pattern
+    if (s.flags !== undefined) flagsField.text = s.flags
+    if (s.replacement !== undefined) { replField.text = s.replacement; useReplace = true }
+    restoring = false
+    compute()
+    focusInput()
   }
 
   // User regexes never run in the shell: they go to a separate, killable
@@ -587,6 +639,13 @@ Item {
 
   Timer { id: toastTimer; interval: 1600; onTriggered: root.toast = "" }
 
+  Timer {
+    id: markdownDebounce
+    property bool firing: false
+    interval: 250
+    onTriggered: { firing = true; root.compute(); firing = false }
+  }
+
   // Keep "now" live in the Timestamp tool when the input is empty.
   Timer {
     interval: 1000
@@ -636,6 +695,7 @@ Item {
       Shortcut { sequence: "Ctrl+L"; onActivated: { inputEd.text = ""; input2Ed.text = ""; root.focusInput() } }
       Shortcut { sequence: "Ctrl+Return"; onActivated: (root.toolId === "uuid" || root.toolId === "password") ? root.compute() : root.useOutputAsInput() }
       Shortcut { sequence: "Ctrl+D"; enabled: root.clipTool !== ""; onActivated: root.loadClipboardSuggestion() }
+      Shortcut { sequence: "Ctrl+Shift+S"; enabled: root.hasSample || root.sampleShown; onActivated: root.loadSample() }
       Repeater {
         model: root.tools.length
         delegate: Item {
@@ -675,23 +735,38 @@ Item {
             Layout.bottomMargin: Style.spacing.lg
           }
 
-          Repeater {
-            model: root.tools
-            delegate: Button {
-              required property var modelData
-              required property int index
-              Layout.fillWidth: true
-              leftAlign: true
-              selected: root.toolId === modelData.id
-              text: (modelData.badge + "    ").slice(0, 4) + " " + modelData.name
-              foreground: root.foreground
-              accent: root.accent
-              tooltipText: index < 10 ? "Ctrl+" + ((index + 1) % 10) : (modelData.shortcut || "").replace("Shift+", "⇧")
-              onClicked: root.selectTool(modelData.id)
+          // Scrolls only if the list outgrows the window (small screens or
+          // large fonts), so the shortcut footer always stays visible.
+          Flickable {
+            id: toolList
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            contentHeight: toolColumn.implicitHeight
+            clip: true
+            boundsBehavior: Flickable.StopAtBounds
+            QQC.ScrollBar.vertical: QQC.ScrollBar { policy: toolList.contentHeight > toolList.height ? QQC.ScrollBar.AsNeeded : QQC.ScrollBar.AlwaysOff }
+            ColumnLayout {
+              id: toolColumn
+              width: toolList.width
+              spacing: Style.spacing.xs
+              Repeater {
+                model: root.tools
+                delegate: Button {
+                  required property var modelData
+                  required property int index
+                  Layout.fillWidth: true
+                  leftAlign: true
+                  verticalPadding: Style.spacing.controlPaddingY * 0.6
+                  selected: root.toolId === modelData.id
+                  text: (modelData.badge + "    ").slice(0, 4) + " " + modelData.name
+                  foreground: root.foreground
+                  accent: root.accent
+                  tooltipText: index < 10 ? "Ctrl+" + ((index + 1) % 10) : (modelData.shortcut || "").replace("Shift+", "⇧")
+                  onClicked: root.selectTool(modelData.id)
+                }
+              }
             }
           }
-
-          Item { Layout.fillHeight: true }
 
           PlainText {
             Layout.fillWidth: true
@@ -700,7 +775,7 @@ Item {
             font.pixelSize: Style.font.caption
             lineHeight: 1.25
             // Tools past Ctrl+0 show their own key (Ctrl+⇧…) on hover.
-            text: "Ctrl+1…0   switch tool\nCtrl+⇧V/C  paste / copy\nCtrl+↵     output → input\nCtrl+L     clear · Esc close"
+            text: "Ctrl+1…0   switch tool\nCtrl+⇧V/C  paste / copy\nCtrl+⇧S    sample\nCtrl+L · Esc clear · close"
           }
         }
 
@@ -991,6 +1066,13 @@ Item {
                 onTextChanged: root.compute()
               }
               actions: [
+                Button {
+                  visible: root.hasSample || root.sampleShown
+                  text: root.sampleShown ? "Undo sample" : "Sample"
+                  foreground: root.sampleShown ? root.accent : root.dim
+                  tooltipText: root.sampleShown ? "Put your input back (Ctrl+⇧S)" : "Load example input (Ctrl+⇧S)"
+                  onClicked: root.loadSample()
+                },
                 Button { text: "Paste"; foreground: root.dim; onClicked: root.readClipboard("paste") },
                 Button { text: "Clear"; foreground: root.dim; onClicked: { inputEd.text = ""; inputEd.area.forceActiveFocus() } }
               ]
@@ -998,6 +1080,8 @@ Item {
 
             Pane {
               visible: root.toolId === "diff"
+              // Every pane in this row needs a stretch factor, or the split is uneven.
+              Layout.horizontalStretchFactor: 1
               title: "Changed"
               Editor {
                 id: input2Ed
@@ -1014,11 +1098,42 @@ Item {
             Pane {
               visible: root.toolId !== "diff"
               Layout.horizontalStretchFactor: root.toolId === "cron" ? 3 : 1
-              title: "Output"
+              title: root.outHtml !== "" ? "Preview" : "Output"
+              // Markdown preview. The HTML comes from Tools.markdownHtml, which
+              // escapes all text and emits no <img>, so nothing is fetched.
+              BorderSurface {
+                anchors.fill: parent
+                visible: root.outHtml !== ""
+                color: root.fieldFill
+                borderSpec: Border.controlSpec("normal", root.foreground, root.accent)
+                radius: Style.cornerRadius
+                QQC.ScrollView {
+                  id: previewScroll
+                  anchors.fill: parent
+                  anchors.margins: Style.spacing.md
+                  clip: true
+                  TextEdit {
+                    width: previewScroll.availableWidth
+                    readOnly: true
+                    selectByMouse: true
+                    textFormat: TextEdit.RichText
+                    wrapMode: TextEdit.Wrap
+                    text: root.outHtml
+                    color: root.foreground
+                    font.pixelSize: Style.font.body
+                    selectionColor: Style.selectionFillFor(root.foreground, root.accent)
+                    selectedTextColor: root.foreground
+                    onLinkActivated: function (link) {
+                      if (/^(https?:|mailto:)/i.test(link)) Qt.openUrlExternally(link)
+                    }
+                    HoverHandler { cursorShape: parent.hoveredLink ? Qt.PointingHandCursor : Qt.IBeamCursor }
+                  }
+                }
+              }
               Editor {
                 id: outputEd
                 anchors.fill: parent
-                visible: root.outPairs.length === 0
+                visible: root.outPairs.length === 0 && root.outHtml === ""
                 readOnly: true
                 text: root.outText
                 textColor: root.foreground
@@ -1030,7 +1145,7 @@ Item {
               }
               actions: [
                 Button {
-                  visible: root.toolId !== "uuid" && root.toolId !== "hash" && root.toolId !== "password" && root.toolId !== "cron" && root.outPairs.length === 0
+                  visible: root.toolId !== "uuid" && root.toolId !== "hash" && root.toolId !== "password" && root.toolId !== "cron" && root.toolId !== "markdown" && root.outPairs.length === 0
                   text: "→ Input"; foreground: root.dim; tooltipText: "Use output as input (Ctrl+↵)"
                   onClicked: root.useOutputAsInput()
                 },

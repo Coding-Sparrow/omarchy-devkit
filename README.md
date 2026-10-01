@@ -3,7 +3,8 @@
 The developer tools you reach for every day, one click away on the Omarchy bar:
 JSON (and JSON to YAML, TypeScript or CSV), JWT, Base64, URL, escaping,
 timestamps, cron, UUIDs and ULIDs, passwords, hashes, colours, number bases,
-case conversion, regex, line tools and text diff. It opens as a floating window. Do the job, press `Esc`, and
+case conversion, regex, line tools, text diff and a Markdown preview. Every tool
+has a **Sample** button, so you can see what it does before you paste anything. It opens as a floating window. Do the job, press `Esc`, and
 you're back.
 
 ![DevKit decoding a JWT](preview.png)
@@ -37,6 +38,7 @@ secrets stay out of clipboard history.
 | `Ctrl+⇧N` | **Number Base** | Decimal, hex, octal and binary, exact at any size (a 256-bit hash converts digit for digit). Two's complement at 8/16/32/64 bits, the signed reading of a value, and its Unicode character |
 | `Ctrl+⇧O` | **Color** | HEX, RGB, HSL, HSV, OKLCH, Hyprland `rgba(…)`, Qt/Android `#AARRGGBB` and CSS names, both ways. Live swatch with alpha, and WCAG contrast on white and black |
 | `Ctrl+⇧L` | **Lines** | Natural sort (`file2` before `file10`), reverse sort, unique, count (like `sort \| uniq -c \| sort -rn`), reverse and trim. Always shows lines, unique lines, words, characters and bytes |
+| `Ctrl+⇧M` | **Markdown** | Live GitHub-flavoured preview (headings, lists, task lists, tables with alignment, code, quotes, links) and Markdown → HTML. Raw HTML is shown as text and images are never loaded, so previewing a pasted README makes no network request. Links open in your browser only when clicked |
 
 ## Screenshots
 
@@ -50,6 +52,7 @@ secrets stay out of clipboard history.
 | **Password generator**<br>![Password](screenshots/11-password.png) | **Cron**, explained with its next runs<br>![Cron](screenshots/12-cron.png) |
 | **Color**, every format plus contrast<br>![Color](screenshots/13-color.png) | **JSON → TypeScript**<br>![JSON to TypeScript](screenshots/14-json-ts.png) |
 | **Number base**, exact with two's complement<br>![Number base](screenshots/15-number.png) | **Lines**, counting repeated log lines<br>![Lines](screenshots/16-lines.png) |
+| **Markdown**, live preview<br>![Markdown](screenshots/17-markdown.png) | **Escape**, decoding HTML entities<br>![Escape](screenshots/18-escape.png) |
 
 ## Requirements
 
@@ -94,13 +97,18 @@ JSON, Base64, a URL, a timestamp, a cron expression, a colour or a `0x`/`0b`
 number, a banner offers to load it (`Ctrl+D`).
 Click any row in the Hash, Case or Timestamp output to copy that value.
 
+**Sample** (`Ctrl+Shift+S`) loads an example for the current tool and mode: a
+signed JWT, a CSV file, a crontab line, a Markdown page and so on. Press it
+again (**Undo sample**) to get your own input back.
+
 | Key | Action |
 | --- | --- |
 | `Ctrl+1…0` | Switch tool |
 | `Ctrl+Tab` / `Ctrl+Shift+Tab` | Next / previous tool |
 | `Ctrl+Shift+P` | Jump to the Password Generator |
 | `Ctrl+Shift+R` | Jump to Cron |
-| `Ctrl+Shift+E` / `N` / `O` / `L` | Jump to Escape / Number Base / Color / Lines |
+| `Ctrl+Shift+E` / `N` / `O` / `L` / `M` | Jump to Escape / Number Base / Color / Lines / Markdown |
+| `Ctrl+Shift+S` | Load the sample, or put your input back |
 | `Ctrl+Shift+V` | Paste the clipboard into the input |
 | `Ctrl+Shift+C` | Copy the output |
 | `Ctrl+Enter` | Make the output the input (chain, e.g. Base64 → JSON); regenerate in UUID and Password |
@@ -146,10 +154,11 @@ omarchy-shell shell summon coding-sparrow.devkit '{"action":"clipboard"}'
 
 Payload fields: `tool` (`json`, `jwt`, `base64`, `url`, `time`, `uuid`,
 `password`, `hash`, `case`, `regex`, `diff`, `cron`, `escape`, `number`,
-`color`, `lines`), `mode` (for example `minify`, `yaml`, `ts`, `decode`,
+`color`, `lines`, `markdown`), `mode` (for example `minify`, `yaml`, `ts`, `decode`,
 `parse`, `v7`, `ulid`, `utc`, `shell` or `count`), `input`, `input2` (the diff's second text),
 `pattern`, `flags`, `replacement`, `length` (password length), `count` (UUIDs
-or passwords), and `action: "clipboard"`.
+or passwords), `sample: true` (load the tool's sample), and
+`action: "clipboard"`.
 
 ## Update
 
@@ -205,12 +214,17 @@ from `~/.config/hypr/bindings.lua` yourself.
 - **No rich-text injection.** Every label renders as plain text, so markup in a
   pasted value (for example `<img src="file:///…">` in a JWT claim) shows up as
   literal text.
+- **Markdown never reaches the network.** DevKit renders Markdown itself
+  instead of using Qt's built-in support, which would load remote images and
+  interpret raw HTML. All text is escaped, images become `[image: alt]`, and
+  only `http(s)` and `mailto` links open, and only when you click one.
 - **JWT signatures are not verified.** That needs the signing key, and the
   decoder says so on screen.
 
 Processes DevKit runs: `bin/devkit-clip` (which runs `wl-paste`), `wl-copy`,
 `bin/devkit-hash`, `bin/devkit-regex` (which runs `qml` with
-`bin/devkit-regex-worker.qml`), and `bin/devkit-window` (`hyprctl`, `jq`). All
+`bin/devkit-regex-worker.qml`), `bin/devkit-window` (`hyprctl`, `jq`), and,
+only when you click a link in the Markdown preview, your default browser. All
 tool logic is plain JavaScript in `Tools.js`.
 
 ## Troubleshooting

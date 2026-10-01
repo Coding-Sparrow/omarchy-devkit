@@ -51,6 +51,17 @@ function perfCases(T) {
     "json → csv": () => T.run("json", { mode: "csv", input: JSON.stringify(Array.from({ length: 20000 }, (_, i) => ({ a: i, b: "x,y", c: { d: i } }))) }),
     "csv → json: quotes": () => T.run("json", { mode: "from-csv", input: '"' + "a".repeat(N) }),
     "csv → json: rows": () => T.run("json", { mode: "from-csv", input: "a,b,c\n" + "1,2,3\n".repeat(Math.floor(N / 8)) }),
+    "markdown: unclosed bold": () => T.run("markdown", { input: "**a ".repeat(32768) }),
+    "markdown: unclosed underscores": () => T.run("markdown", { input: "__a ".repeat(32768) }),
+    "markdown: unclosed strike": () => T.run("markdown", { input: "~~a ".repeat(32768) }),
+    "markdown: backticks": () => T.run("markdown", { input: "`a ``b ".repeat(16384) }),
+    "markdown: unclosed links": () => T.run("markdown", { input: "[a](".repeat(20000) }),
+    "markdown: unclosed images": () => T.run("markdown", { input: "![".repeat(60000) }),
+    "markdown: deep quotes": () => T.run("markdown", { input: ">".repeat(100000) }),
+    "markdown: deep list": () => T.run("markdown", { input: "- ".repeat(30000) + "x" }),
+    "markdown: big table": () => T.run("markdown", { input: "|a|b|\n|-|-|\n" + "|x|y|\n".repeat(18000) }),
+    "markdown: dense list": () => T.run("markdown", { input: "- [x] **b** `c` [d](e)\n".repeat(5000) }),
+    "detect: markdown-ish": () => T.detect("# a\n" + "**".repeat(Math.floor(N / 2))),
     "password: largest draw": () => T.run("password", { length: 128, count: 64, upper: true, lower: true, digits: true, special: true, randomBytes: MAX_PW_BYTES }),
   }
 }

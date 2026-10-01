@@ -420,4 +420,61 @@ for (const [s, t] of [["#ff8800", "color"], ["rgb(1 2 3)", "color"], ["oklch(70%
   assert.equal(T.detect(s), t, s)
 for (const s of ["#zzz", "123", "rgb(nope)"]) assert.notEqual(T.detect(s), "color", s)
 
+// ---- Markdown: GFM subset, escaped, never an <img>, safe links only
+const md = (input) => run("markdown", { input, mode: "html" }).output
+assert.equal(md("# Title\n\nSome **bold**, *it*, _it_, ~~gone~~ and `<code>`."),
+  "<h1>Title</h1>\n<p>Some <b>bold</b>, <i>it</i>, <i>it</i>, <s>gone</s> and <code>&lt;code&gt;</code>.</p>")
+assert.equal(md("Title\n====\n\nSub\n---"), "<h1>Title</h1>\n<h2>Sub</h2>")
+assert.equal(md("- a\n- b\n  - c\n\n1. x\n2. y"), "<ul><li>a</li><li>b\n<ul><li>c</li></ul></li></ul>\n<ol><li>x</li><li>y</li></ol>")
+assert.equal(md("3. three\n4. four"), '<ol start="3"><li>three</li><li>four</li></ol>')
+assert.equal(md("- [x] done\n- [ ] todo"), "<ul><li>☑ done</li><li>☐ todo</li></ul>")
+assert.equal(md("```js\nif (a < b) {}\n```"), "<p><small>js</small></p><pre>if (a &lt; b) {}</pre>")
+assert.equal(md("> quote\n> more"), "<blockquote><p>quote more</p></blockquote>")
+assert.equal(md("| a | b |\n|:--|--:|\n| 1 | `x\\|y` |"),
+  '<table><tr><th align="left">a</th><th align="right">b</th></tr><tr><td align="left">1</td><td align="right"><code>x|y</code></td></tr></table>')
+assert.equal(md("a  \nb"), "<p>a<br>b</p>")
+assert.equal(md("***"), "<hr>")
+assert.equal(md("\\*not em\\*"), "<p>*not em*</p>")
+assert.equal(md("see https://example.com/a."), '<p>see <a href="https://example.com/a">https://example.com/a</a>.</p>')
+assert.equal(md("[ok](https://x.y) [rel](docs/a.md) [bad](javascript:alert) [bad2](file:///etc/passwd)"),
+  '<p><a href="https://x.y">ok</a> <a href="docs/a.md">rel</a> bad bad2</p>')
+// Raw HTML is shown, never interpreted; images never become <img>
+const hostile = md('<script>alert(1)</script> <img src=x onerror=alert(1)> ![alt](https://e.com/x.png) <b>hi</b>')
+assert.doesNotMatch(hostile, /<(script|img|b)\b/)
+assert.match(hostile, /&lt;script&gt;/)
+assert.match(hostile, /\[image: alt\]/)
+assert.doesNotMatch(md(Array(50).fill("![a](http://t/a.png)").join(" ") + "\n\n> ".repeat(30) + "[x](http://t)"), /<img/i)
+// The preview carries theme colours; the HTML to copy does not
+const prev = run("markdown", { input: "# Hi", mode: "preview", theme: { accent: "#ff0000", dim: "#888888", code: "#222222", border: "#444444" } })
+assert.match(prev.html, /color: #ff0000/)
+assert.equal(prev.output, "<h1>Hi</h1>")
+assert.equal(run("markdown", { input: "# Hi", mode: "html" }).html, undefined)
+assert.match(run("markdown", { input: "x".repeat(200000) }).error, /128 KiB/)
+assert.match(run("markdown", { input: "one two three" }).info, /^3 words/)
+
+// ---- Samples: every tool with input has one, and it runs cleanly in every mode
+for (const t of T.TOOLS) {
+  const modes = t.modes.length ? t.modes.map((m) => m.value) : [""]
+  for (const mode of modes) {
+    const s = T.sample(t.id, mode)
+    if (t.id === "uuid" || t.id === "password") { assert.equal(s, null, t.id); continue }
+    assert.ok(s && s.input, `${t.id} ${mode} has a sample`)
+    if (t.id === "hash") continue   // computed by bin/devkit-hash, not Tools.run
+    const r = run(t.id, { ...s, useReplace: !!s.replacement, mode })
+    assert.equal(r.error, "", `${t.id} ${mode} sample: ${r.error}`)
+    assert.ok(r.output || (r.pairs && r.pairs.length) || (r.rows && r.rows.length), `${t.id} ${mode} sample has output`)
+  }
+}
+// sample() returns a copy, so loading it cannot change the table
+const s1 = T.sample("json", "pretty2"); s1.input = "changed"
+assert.notEqual(T.sample("json", "pretty2").input, "changed")
+// The sample JWT is genuinely HS256-signed (secret: devkit-sample-secret)
+{
+  const crypto = await import("node:crypto")
+  const [h, p, sig] = T.sample("jwt", "").input.split(".")
+  assert.equal(crypto.createHmac("sha256", "devkit-sample-secret").update(h + "." + p).digest("base64url"), sig)
+}
+assert.equal(T.detect(T.sample("markdown", "preview").input), "markdown")
+assert.equal(T.detect("# just a heading\nand some text"), "")
+
 console.log("tools.test.mjs: ok")
