@@ -12,6 +12,7 @@ import importlib.util
 import io
 import json
 import os
+import re
 import stat
 import subprocess
 import sys
@@ -41,7 +42,11 @@ def clip(script):
 def no_stray(pattern):
     time.sleep(0.2)
     ps = subprocess.run(["ps", "-eo", "args"], capture_output=True, text=True).stdout
-    strays = [line for line in ps.splitlines() if pattern in line and "helpers.test" not in line]
+    # Ignore shells whose command text merely mentions the pattern (an editor
+    # or agent running `bash -c "…devkit-regex-worker…"`); only real leftovers count.
+    strays = [line for line in ps.splitlines()
+              if pattern in line and "helpers.test" not in line
+              and not re.match(r"^\S*/?(ba|z|da)?sh -c ", line)]
     assert not strays, strays
 
 
