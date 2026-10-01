@@ -129,7 +129,7 @@ never smaller than 760×480. To use a different share, pass `width` and
 choice lasts until the shell restarts:
 
 ```lua
-o.bind("SUPER + ALT + D", "DevKit", "omarchy-shell shell summon coding-sparrow.devkit '{\"width\":0.8,\"height\":0.85}'")
+o.bind("SUPER + ALT + D", "DevKit", "omarchy-shell shell toggle coding-sparrow.devkit '{\"width\":0.8,\"height\":0.85}'")
 ```
 
 **Move the bar icon:**
