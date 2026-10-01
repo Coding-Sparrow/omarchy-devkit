@@ -32,7 +32,11 @@ var TOOLS = [
     modes: [], placeholder: "Original text…" },
   { id: "password", badge: "PW", name: "Password Generator", description: "CSPRNG passwords; letter sets skip I and l",
     // Tools past the tenth have no Ctrl+digit key, so they name their own.
-    shortcut: "Ctrl+Shift+P", modes: [], placeholder: "" }
+    shortcut: "Ctrl+Shift+P", modes: [], placeholder: "" },
+  { id: "cron", badge: "CR", name: "Cron", description: "Explain a cron expression and list its next runs",
+    shortcut: "Ctrl+Shift+R",
+    modes: [{ value: "local", label: "Local time" }, { value: "utc", label: "UTC" }],
+    placeholder: "*/15 9-17 * * 1-5   (minute hour day month weekday), or @daily" }
 ]
 
 function toolById(id) {
@@ -324,6 +328,251 @@ function timeTool(input, nowMs) {
     ["Day of week", ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"][d.getDay()]]
   ]
   return withPairs(pairs, "Read as " + p.unit)
+}
+
+// ---------------------------------------------------------------- Cron
+
+// Standard 5-field cron (crontab, Kubernetes, GitHub Actions): minute hour
+// day-of-month month day-of-week, with lists, ranges, steps, names and macros.
+var CRON_MAX = 1000             // real expressions are a few dozen characters
+var CRON_RUNS = 10
+var CRON_HORIZON_YEARS = 10     // Feb 29 schedules can skip 8 years (2096 → 2104)
+var CRON_MONTHS = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"]
+var CRON_DAYS = ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"]
+var MONTH_NAMES = ["January", "February", "March", "April", "May", "June", "July",
+                   "August", "September", "October", "November", "December"]
+var DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
+var CRON_MACROS = {
+  "@yearly": "0 0 1 1 *", "@annually": "0 0 1 1 *", "@monthly": "0 0 1 * *",
+  "@weekly": "0 0 * * 0", "@daily": "0 0 * * *", "@midnight": "0 0 * * *", "@hourly": "0 * * * *"
+}
+var CRON_FIELDS = [
+  { name: "Minute", min: 0, max: 59 },
+  { name: "Hour", min: 0, max: 23 },
+  { name: "Day of month", min: 1, max: 31 },
+  { name: "Month", min: 1, max: 12, names: CRON_MONTHS },
+  { name: "Day of week", min: 0, max: 7, names: CRON_DAYS }   // 0 and 7 are both Sunday
+]
+// Starting points for building an expression; the description updates as you edit.
+var CRON_PRESETS = [
+  { label: "Every 5 min", expr: "*/5 * * * *" },
+  { label: "Hourly", expr: "0 * * * *" },
+  { label: "Daily 09:00", expr: "0 9 * * *" },
+  { label: "Weekdays 09:00", expr: "0 9 * * 1-5" },
+  { label: "Monthly", expr: "0 0 1 * *" }
+]
+
+function cronValue(text, field) {
+  if (/^\d+$/.test(text)) return Number(text)
+  if (field.names) {
+    var i = field.names.indexOf(text.toUpperCase())
+    if (i >= 0) return i + field.min
+  }
+  return NaN
+}
+
+// One field into its parts and a lookup table; throws a readable message.
+function cronField(text, field) {
+  // `?` (Quartz "no specific value") reads as `*`. Both count as unrestricted
+  // for the day-of-month / day-of-week rule below, with or without a step.
+  text = text.replace(/^\?/, "*")
+  var star = text.charAt(0) === "*"
+  if (/[LW#]/i.test(field.names ? text.replace(/[A-Za-z]{3}/g, function (n) { return field.names.indexOf(n.toUpperCase()) >= 0 ? "" : n }) : text))
+    throw field.name + ": L, W and # are Quartz extensions, not standard cron"
+  var set = [], parts = []
+  text.split(",").forEach(function (part) {
+    if (part === "") throw field.name + ": empty item in a list"
+    var bits = part.split("/")
+    if (bits.length > 2) throw field.name + ": \"" + part + "\" has more than one /"
+    var step = 1
+    if (bits.length === 2) {
+      if (!/^\d+$/.test(bits[1]) || Number(bits[1]) < 1) throw field.name + ": step \"" + bits[1] + "\" must be a positive number"
+      step = Number(bits[1])
+    }
+    var lo, hi, kind
+    if (bits[0] === "*") { lo = field.min; hi = field.max === 7 ? 6 : field.max; kind = "all" }
+    else {
+      var range = bits[0].split("-")
+      if (range.length > 2) throw field.name + ": \"" + bits[0] + "\" is not a range"
+      lo = cronValue(range[0], field)
+      // "5/15" means "from 5, every 15", like "5-59/15".
+      hi = range.length === 2 ? cronValue(range[1], field) : (bits.length === 2 ? field.max : lo)
+      if (isNaN(lo) || isNaN(hi)) throw field.name + ": \"" + part + "\" is not a valid value"
+      var bad = lo < field.min || lo > field.max ? lo : (hi < field.min || hi > field.max ? hi : null)
+      if (bad !== null) throw field.name + ": " + bad + " is out of range (" + field.min + "–" + field.max + ")"
+      if (lo > hi) throw field.name + ": range " + bits[0] + " goes backwards"
+      kind = range.length === 2 || bits.length === 2 ? "range" : "value"
+    }
+    for (var v = lo; v <= hi; v += step) set[field.max === 7 && v === 7 ? 0 : v] = true
+    parts.push({ kind: kind, lo: lo, hi: hi, step: step })
+  })
+  var values = []
+  var top = field.max === 7 ? 6 : field.max    // 7 was folded into 0
+  for (var v = field.min; v <= top; v++) if (set[v]) values.push(v)
+  var size = top - field.min + 1
+  return { text: text, star: star, set: set, values: values, parts: parts, all: values.length === size }
+}
+
+// Returns { fields, command, expr } or { error }. A crontab line may carry a
+// command after the five fields; it is shown, never run.
+function parseCron(line) {
+  var s = String(line).trim()
+  if (s.charAt(0) === "@") {
+    var name = s.split(/\s+/)[0].toLowerCase()
+    if (name === "@reboot") return { error: "@reboot runs once when cron starts; it has no schedule" }
+    if (!CRON_MACROS.hasOwnProperty(name)) return { error: "Unknown macro " + name + " (use @yearly, @monthly, @weekly, @daily or @hourly)" }
+    var rest = s.slice(name.length).trim()
+    s = CRON_MACROS[name] + (rest ? " " + rest : "")
+  }
+  var tokens = s.split(/\s+/)
+  if (tokens.length < 5) return { error: "Expected 5 fields (minute hour day month weekday); found " + tokens.length }
+  if ((tokens.length === 6 || tokens.length === 7) && tokens.every(function (t) { return /^[\d*?,\/LW#-]+$/i.test(t) }))
+    return { error: "Looks like Quartz/Spring cron with a seconds field; DevKit reads the standard 5-field format" }
+  var fields = []
+  try {
+    for (var i = 0; i < 5; i++) fields.push(cronField(tokens[i], CRON_FIELDS[i]))
+  } catch (e) {
+    return { error: String(e) }
+  }
+  return { fields: fields, expr: tokens.slice(0, 5).join(" "), command: tokens.slice(5).join(" ") }
+}
+
+function cronDaysIn(y, mo) { return new Date(Date.UTC(y, mo, 0)).getUTCDate() }
+
+// Classic cron rule: when both day fields are restricted (neither starts with
+// *), a day matches if EITHER matches; otherwise both must.
+function cronDayMatches(f, y, mo, d) {
+  var dom = !!f[2].set[d], wd = !!f[4].set[new Date(Date.UTC(y, mo - 1, d)).getUTCDay()]
+  return f[2].star || f[4].star ? dom && wd : dom || wd
+}
+
+// Next runs strictly after fromMs. Walks the calendar field by field, so a
+// rare schedule costs a few thousand day checks, not millions of minutes.
+function cronNext(f, fromMs, count, utc) {
+  var s = new Date(Math.floor(fromMs / 60000) * 60000 + 60000)
+  var sy = utc ? s.getUTCFullYear() : s.getFullYear()
+  var smo = (utc ? s.getUTCMonth() : s.getMonth()) + 1
+  var sd = utc ? s.getUTCDate() : s.getDate()
+  var sh = utc ? s.getUTCHours() : s.getHours()
+  var smi = utc ? s.getUTCMinutes() : s.getMinutes()
+  var runs = []
+  for (var y = sy; y <= sy + CRON_HORIZON_YEARS; y++) {
+    for (var mo = y === sy ? smo : 1; mo <= 12; mo++) {
+      if (!f[3].set[mo]) continue
+      var firstMonth = y === sy && mo === smo
+      for (var d = firstMonth ? sd : 1; d <= cronDaysIn(y, mo); d++) {
+        if (!cronDayMatches(f, y, mo, d)) continue
+        var today = firstMonth && d === sd
+        for (var h = today ? sh : 0; h < 24; h++) {
+          if (!f[1].set[h]) continue
+          for (var mi = today && h === sh ? smi : 0; mi < 60; mi++) {
+            if (!f[0].set[mi]) continue
+            var ms = utc ? Date.UTC(y, mo - 1, d, h, mi) : new Date(y, mo - 1, d, h, mi).getTime()
+            // A local time skipped by a DST change does not exist; skip it.
+            if (!utc) { var t = new Date(ms); if (t.getHours() !== h || t.getMinutes() !== mi) continue }
+            if (ms <= fromMs) continue
+            runs.push(ms)
+            if (runs.length >= count) return runs
+          }
+        }
+      }
+    }
+  }
+  return runs
+}
+
+function cronJoin(items) {
+  if (items.length <= 1) return items.join("")
+  return items.slice(0, -1).join(", ") + " and " + items[items.length - 1]
+}
+
+function cronName(v, i) {
+  if (i === 3) return MONTH_NAMES[v - 1]
+  if (i === 4) return DAY_NAMES[v % 7]
+  return String(v)
+}
+
+// One field's parts in words: "every 2 hours", "Monday through Friday", "1 and 15"…
+function cronParts(field, i, unit) {
+  // Stepped months and weekdays read better as names: "in January and March".
+  if (i >= 3 && field.parts.some(function (p) { return p.step > 1 }))
+    return cronJoin(field.values.map(function (v) { return cronName(v, i) }))
+  return cronJoin(field.parts.map(function (p) {
+    var lo = cronName(p.lo, i), hi = cronName(p.hi, i)
+    if (p.kind === "all") return p.step === 1 ? "every " + unit : "every " + p.step + " " + unit + "s"
+    if (p.kind === "value") return i === 1 ? pad(p.lo) + ":00" : lo
+    var span = i === 1 ? "between " + pad(p.lo) + ":00 and " + pad(p.hi) + ":59" : lo + " through " + hi
+    if (p.step === 1) return span
+    return "every " + p.step + " " + unit + "s " + (i === 1 ? span : "from " + span)
+  }))
+}
+
+function cronDescribe(f) {
+  var m = f[0], h = f[1], out = []
+  var singles = function (x) { return x.parts.every(function (p) { return p.kind === "value" }) }
+  var everyAll = function (x) { return x.parts.length === 1 && x.parts[0].kind === "all" }
+  if (singles(m) && singles(h) && m.values.length * h.values.length <= 4) {
+    var times = []
+    h.values.forEach(function (hv) { m.values.forEach(function (mv) { times.push(pad(hv) + ":" + pad(mv)) }) })
+    out.push("At " + cronJoin(times))
+  } else {
+    if (everyAll(m)) out.push(m.parts[0].step === 1 ? "Every minute" : "Every " + m.parts[0].step + " minutes")
+    else if (singles(m)) out.push("At minute " + cronJoin(m.values.map(String)))
+    else if (m.parts.length === 1 && m.parts[0].step > 1)
+      out.push("Every " + m.parts[0].step + " minutes from minute " + m.parts[0].lo + " through " + m.parts[0].hi)
+    else out.push("At " + cronParts(m, 0, "minute").replace(/(^|, | and )(\d+) through/g, "$1minutes $2 through"))
+    if (everyAll(h) && h.parts[0].step === 1) { if (!everyAll(m)) out[0] += " past every hour" }
+    else if (singles(h)) out.push(h.values.length === 1 ? "between " + pad(h.values[0]) + ":00 and " + pad(h.values[0]) + ":59"
+                                                        : "during hours " + cronJoin(h.values.map(function (v) { return pad(v) })))
+    else out.push(cronParts(h, 1, "hour"))
+  }
+  var dom = f[2], dow = f[4]
+  var domText = everyAll(dom) ? cronParts(dom, 2, "day") : "on day " + cronParts(dom, 2, "day") + " of the month"
+  var dowText = "on " + cronParts(dow, 4, "day")
+  if (!dom.all && !dow.all) out.push(dom.star || dow.star ? domText + ", only if it is a " + cronJoin(dow.values.map(function (v) { return DAY_NAMES[v] }))
+                                                          : domText + " or " + dowText)
+  else if (!dom.all) out.push(domText)
+  else if (!dow.all) out.push(dowText)
+  if (!f[3].all) out.push("in " + cronParts(f[3], 3, "month"))
+  return out.join(", ")
+}
+
+function cronValues(field, i) {
+  if (field.all) return "every"
+  var shown = field.values.slice(0, 12).map(function (v) { return i >= 3 ? cronName(v, i).slice(0, 3) : String(v) })
+  return shown.join(", ") + (field.values.length > 12 ? ", … (" + field.values.length + " values)" : "")
+}
+
+function cronWhen(ms, nowMs, utc) {
+  var d = new Date(ms)
+  var g = function (local, u) { return utc ? d[u]() : d[local]() }
+  return g("getFullYear", "getUTCFullYear") + "-" + pad(g("getMonth", "getUTCMonth") + 1) + "-" + pad(g("getDate", "getUTCDate"))
+    + " " + pad(g("getHours", "getUTCHours")) + ":" + pad(g("getMinutes", "getUTCMinutes"))
+    + " " + DAY_NAMES[g("getDay", "getUTCDay")].slice(0, 3) + "   " + relative(ms, nowMs)
+}
+
+function cronTool(input, mode, nowMs) {
+  if (input.length > CRON_MAX) return result("", "Too long for a cron expression (" + CRON_MAX + " characters max)")
+  // Accept a pasted crontab: read the first line that is not a comment or a
+  // VAR=value setting.
+  var lines = input.split("\n").map(function (l) { return l.trim() })
+                   .filter(function (l) { return l !== "" && l.charAt(0) !== "#" && !/^[A-Za-z_][A-Za-z0-9_]*\s*=/.test(l) })
+  if (lines.length === 0) return result("", "", "Enter a cron expression or pick a preset")
+  var c = parseCron(lines[0])
+  if (c.error) return result("", c.error)
+  var utc = mode === "utc"
+  var f = c.fields
+  var pairs = [["Description", cronDescribe(f)]]
+  for (var i = 0; i < 5; i++) pairs.push([CRON_FIELDS[i].name, f[i].text + "  →  " + cronValues(f[i], i)])
+  if (c.command) pairs.push(["Command", c.command])
+  var runs = cronNext(f, nowMs, CRON_RUNS, utc)
+  runs.forEach(function (ms, k) { pairs.push(["Next " + (k + 1), cronWhen(ms, nowMs, utc)]) })
+  var off = -new Date(nowMs).getTimezoneOffset()
+  var zone = utc ? "UTC" : "local time (UTC" + (off >= 0 ? "+" : "-") + pad(Math.floor(Math.abs(off) / 60)) + ":" + pad(Math.abs(off) % 60) + ")"
+  var info = (lines.length > 1 ? "First of " + lines.length + " lines · " : "") + "Next runs in " + zone
+  var r = withPairs(pairs, runs.length ? info : "Never runs: no matching date in the next " + CRON_HORIZON_YEARS + " years")
+  if (!runs.length) r.urgent = true
+  return r
 }
 
 // ---------------------------------------------------------------- JWT
@@ -783,6 +1032,9 @@ function detect(text) {
   if (s === "" || s.length > DETECT_MAX) return ""
   if (/^(Bearer\s+)?eyJ[A-Za-z0-9_-]*\.eyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]*$/.test(s)) return "jwt"
   if (/^[\[{]/.test(s)) { try { JSON.parse(s); return "json" } catch (e) { if (/^\{\s*"/.test(s)) return "json" } }
+  if (/^@(yearly|annually|monthly|weekly|daily|midnight|hourly)$/i.test(s)) return "cron"
+  // Five fields with at least one * or /, e.g. "*/5 * * * *" or "0 9 * * MON-FRI".
+  if (s.length <= CRON_MAX && /^([\d*?,\/-]+[ \t]+){4}[\dA-Za-z*?,\/-]+$/.test(s) && /[*\/]/.test(s)) return "cron"
   if (/^\d{10}(\d{3})?$/.test(s)) return "time"
   if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(s)) return "time"
   if (/^https?:\/\/\S+$/.test(s)) return "url"
@@ -807,6 +1059,7 @@ function run(toolId, state) {
   case "base64": return base64Tool(input, state.mode || "encode")
   case "url": return urlTool(input, state.mode || "encode")
   case "time": return timeTool(input, state.nowMs)
+  case "cron": return cronTool(input, state.mode || "local", state.nowMs)
   case "uuid": return uuidTool(state.mode || "v4", state.count, state.nowMs, state.randomBytes, state.upper)
   case "password": return passwordTool(state, state.randomBytes)
   case "case": return caseTool(input)

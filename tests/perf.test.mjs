@@ -40,6 +40,11 @@ const cases = {
   "jwt: junk": () => T.run("jwt", { input: "a.".repeat(N / 2) }),
   "diff: at the cell cap": () => T.run("diff", { input: "a\n".repeat(2000), input2: "b\n".repeat(2000) }),
   "diff: over the cell cap": () => T.run("diff", { input: "a\n".repeat(N / 4), input2: "b\n".repeat(N / 4) }),
+  "cron: junk at the cap": () => T.run("cron", { input: "*,".repeat(499) + " * * * *", nowMs: 0 }),
+  "cron: over the cap": () => T.run("cron", { input: "* ".repeat(N / 2), nowMs: 0 }),
+  "cron: never matches": () => T.run("cron", { input: "* * 31 2 *", nowMs: 0 }),
+  "cron: sparse match": () => T.run("cron", { input: "59 23 29 2 1", nowMs: 0 }),
+  "detect: cron-ish": () => T.detect("1 ".repeat(N / 2)),
   "password: largest draw": () => T.run("password", { length: 128, count: 64, upper: true, lower: true, digits: true, special: true, randomBytes: MAX_PW_BYTES }),
 }
 

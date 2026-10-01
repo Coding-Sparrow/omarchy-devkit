@@ -2,7 +2,7 @@
 
 The developer tools you reach for every day, one click away on the Omarchy bar:
 JSON, JWT, Base64, URL, timestamps, UUIDs, passwords, hashes, case conversion,
-regex and text diff. It opens as a floating window. Do the job, press `Esc`, and
+regex, text diff and cron. It opens as a floating window. Do the job, press `Esc`, and
 you're back.
 
 ![DevKit decoding a JWT](preview.png)
@@ -31,6 +31,7 @@ secrets stay out of clipboard history.
 | `Ctrl+9` | **Regex Tester** | JS regex matches, numbered and named groups, replace with `$1` or `$<name>`. Runs in a separate process with a 1.5 s deadline |
 | `Ctrl+0` | **Text Diff** | Line diff of two texts |
 | `Ctrl+⇧P` | **Password Generator** | Length, count, upper/lower/digits/special sets and a comma-separated exclude list. CSPRNG-only, one character from each selected set. The letter sets skip `I`/`l`. Results under 60 bits are flagged as weak |
+| `Ctrl+⇧R` | **Cron** | Explains a 5-field cron expression in plain English and lists the next 10 runs, in local time or UTC. Names (`MON-FRI`, `JAN`), steps, ranges, `@daily`-style macros and pasted crontab lines. Presets to start from |
 
 ## Screenshots
 
@@ -41,7 +42,7 @@ secrets stay out of clipboard history.
 | **Timestamp**, click a row to copy<br>![Timestamp](screenshots/05-timestamp.png) | **UUID** v7, bulk<br>![UUID](screenshots/06-uuid.png) |
 | **Hash**<br>![Hash](screenshots/07-hash.png) | **Case converter**<br>![Case](screenshots/08-case.png) |
 | **Regex tester** with named groups<br>![Regex](screenshots/09-regex.png) | **Text diff**<br>![Diff](screenshots/10-diff.png) |
-| **Password generator**<br>![Password](screenshots/11-password.png) | |
+| **Password generator**<br>![Password](screenshots/11-password.png) | **Cron**, explained with its next runs<br>![Cron](screenshots/12-cron.png) |
 
 ## Requirements
 
@@ -82,7 +83,7 @@ omarchy plugin enable coding-sparrow.devkit
 - Press **`Esc`** to close.
 
 When DevKit opens, it checks the clipboard. If the content looks like a JWT,
-JSON, Base64, a URL or a timestamp, a banner offers to load it (`Ctrl+D`).
+JSON, Base64, a URL, a timestamp or a cron expression, a banner offers to load it (`Ctrl+D`).
 Click any row in the Hash, Case or Timestamp output to copy that value.
 
 | Key | Action |
@@ -90,6 +91,7 @@ Click any row in the Hash, Case or Timestamp output to copy that value.
 | `Ctrl+1…0` | Switch tool |
 | `Ctrl+Tab` / `Ctrl+Shift+Tab` | Next / previous tool |
 | `Ctrl+Shift+P` | Jump to the Password Generator |
+| `Ctrl+Shift+R` | Jump to Cron |
 | `Ctrl+Shift+V` | Paste the clipboard into the input |
 | `Ctrl+Shift+C` | Copy the output |
 | `Ctrl+Enter` | Make the output the input (chain, e.g. Base64 → JSON); regenerate in UUID and Password |
@@ -134,8 +136,8 @@ omarchy-shell shell summon coding-sparrow.devkit '{"action":"clipboard"}'
 ```
 
 Payload fields: `tool` (`json`, `jwt`, `base64`, `url`, `time`, `uuid`,
-`password`, `hash`, `case`, `regex`, `diff`), `mode` (for example `minify`,
-`decode`, `parse` or `v7`), `input`, `input2` (the diff's second text),
+`password`, `hash`, `case`, `regex`, `diff`, `cron`), `mode` (for example
+`minify`, `decode`, `parse`, `v7` or `utc`), `input`, `input2` (the diff's second text),
 `pattern`, `flags`, `replacement`, `length` (password length), `count` (UUIDs
 or passwords), and `action: "clipboard"`.
 
@@ -213,6 +215,12 @@ tool logic is plain JavaScript in `Tools.js`.
   `hyprctl -j status | jq -r .configProvider`, which should print `lua`.
 - **The icon doesn't appear.** Make sure the plugin is enabled with
   `omarchy plugin list`, then run `omarchy plugin enable coding-sparrow.devkit`.
+- **Cron says "Quartz" or "seconds field".** DevKit reads the standard 5-field
+  format used by crontab, Kubernetes and GitHub Actions. Quartz and Spring add
+  a seconds field and `L`/`W`/`#`, which aren't supported. Drop the seconds
+  field to check the rest.
+- **Cron times look off by hours.** GitHub Actions and most cloud schedulers
+  run cron in UTC. Switch to **UTC** to see their times.
 - **Changes don't show after an update.** Run `omarchy restart shell`.
 
 ## Develop

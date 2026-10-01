@@ -593,6 +593,14 @@ Item {
     onTriggered: root.compute()
   }
 
+  // Keep Cron's next runs and "in 5 minutes" current while it is open.
+  Timer {
+    interval: 15000
+    repeat: true
+    running: root.opened && root.toolId === "cron"
+    onTriggered: root.compute()
+  }
+
   Component.onCompleted: {
     requestRandom(randomPoolTarget)
     windowRuleProc.running = true
@@ -689,7 +697,7 @@ Item {
             color: root.dim
             font.pixelSize: Style.font.caption
             lineHeight: 1.25
-            text: "Ctrl+1…0   switch tool\nCtrl+Tab   next tool\nCtrl+⇧P    passwords\nCtrl+⇧V    paste input\nCtrl+⇧C    copy output\nCtrl+↵     output → input\nCtrl+L     clear\nEsc        close"
+            text: "Ctrl+1…0   switch tool\nCtrl+Tab   next tool\nCtrl+⇧P    passwords\nCtrl+⇧R    cron\nCtrl+⇧V    paste input\nCtrl+⇧C    copy output\nCtrl+↵     output → input\nCtrl+L     clear\nEsc        close"
           }
         }
 
@@ -758,6 +766,22 @@ Item {
               foreground: root.foreground
               accent: root.accent
               onChanged: function (value) { root.mode = value; root.compute() }
+            }
+
+            // cron: presets are starting points; the description follows edits
+            Item { visible: root.toolId === "cron"; Layout.fillWidth: true }
+            Repeater {
+              model: root.toolId === "cron" ? Tools.CRON_PRESETS : []
+              delegate: Button {
+                required property var modelData
+                text: modelData.label
+                bordered: true
+                selected: inputEd.text.trim() === modelData.expr
+                foreground: root.foreground
+                accent: root.accent
+                tooltipText: modelData.expr
+                onClicked: { inputEd.text = modelData.expr; root.focusInput() }
+              }
             }
 
             // regex
@@ -914,6 +938,8 @@ Item {
 
             Pane {
               visible: root.toolId !== "uuid" && root.toolId !== "password"
+              // A cron expression is one line; give its schedule the room.
+              Layout.horizontalStretchFactor: root.toolId === "cron" ? 2 : 1
               title: root.toolId === "diff" ? "Original" : (root.toolId === "regex" ? "Test text" : "Input")
               Editor {
                 id: inputEd
@@ -944,6 +970,7 @@ Item {
 
             Pane {
               visible: root.toolId !== "diff"
+              Layout.horizontalStretchFactor: root.toolId === "cron" ? 3 : 1
               title: "Output"
               Editor {
                 id: outputEd
@@ -960,7 +987,7 @@ Item {
               }
               actions: [
                 Button {
-                  visible: root.toolId !== "uuid" && root.toolId !== "hash" && root.toolId !== "password" && root.outPairs.length === 0
+                  visible: root.toolId !== "uuid" && root.toolId !== "hash" && root.toolId !== "password" && root.toolId !== "cron" && root.outPairs.length === 0
                   text: "→ Input"; foreground: root.dim; tooltipText: "Use output as input (Ctrl+↵)"
                   onClicked: root.useOutputAsInput()
                 },

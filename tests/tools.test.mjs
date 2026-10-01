@@ -221,4 +221,60 @@ for (const E of [T, V4]) {
     replacement: "$<host>/$<user>", useReplace: true }).output, "b/a d/c")
 }
 
+// Cron: next runs in UTC from NOW (Mon 2024-01-01 12:00 UTC)
+const cron = (input, extra) => run("cron", { input, mode: "utc", ...extra })
+const pair = (r, k) => (r.pairs.find((p) => p[0] === k) || [])[1]
+const next = (r) => [...(r.pairs || [])].filter((p) => /^Next \d+$/.test(p[0])).map((p) => p[1].slice(0, 20))
+assert.equal(T.toolById("cron").shortcut, "Ctrl+Shift+R")
+assert.deepEqual(next(cron("*/5 * * * *")).slice(0, 2), ["2024-01-01 12:05 Mon", "2024-01-01 12:10 Mon"])
+assert.equal(next(cron("* * * * *")).length, 10)
+assert.equal(pair(cron("0 9 * * 1-5"), "Description"), "At 09:00, on Monday through Friday")
+assert.deepEqual(next(cron("0 9 * * MON-FRI")).slice(0, 2), ["2024-01-02 09:00 Tue", "2024-01-03 09:00 Wed"])
+assert.equal(pair(cron("*/15 9-17 * * 1-5"), "Description"), "Every 15 minutes, between 09:00 and 17:59, on Monday through Friday")
+assert.equal(pair(cron("0 */2 * * *"), "Description"), "At minute 0, every 2 hours")
+assert.equal(pair(cron("0 0 1 JAN-MAR/2 *"), "Description"), "At 00:00, on day 1 of the month, in January and March")
+// 0 and 7 are both Sunday; names and numbers agree
+assert.deepEqual(next(cron("0 12 * * 7")), next(cron("0 12 * * SUN")))
+assert.deepEqual(next(cron("0 12 * * 0")), next(cron("0 12 * * sun")))
+// Both day fields restricted: either one matches (1st/15th OR Friday)
+assert.deepEqual(next(cron("0 0 1,15 * 5")).slice(0, 3), ["2024-01-05 00:00 Fri", "2024-01-12 00:00 Fri", "2024-01-15 00:00 Mon"])
+// A starred day field (even with a step) makes it AND: odd days that are Mondays
+assert.deepEqual(next(cron("0 0 */2 * 1")).slice(0, 2), ["2024-01-15 00:00 Mon", "2024-01-29 00:00 Mon"])
+// "5/15" is "5-59/15"
+assert.equal(pair(cron("5/15 * * * *"), "Minute"), "5/15  →  5, 20, 35, 50")
+// Leap days, and dates that never exist
+assert.deepEqual(next(cron("0 0 29 2 *")).slice(0, 3), ["2024-02-29 00:00 Thu", "2028-02-29 00:00 Tue", "2032-02-29 00:00 Sun"])
+const never = cron("0 0 30 2 *")
+assert.equal(next(never).length, 0)
+assert.equal(never.urgent, true)
+assert.match(never.info, /Never runs/)
+// Macros, crontab lines with a command, comments and VAR= lines
+assert.deepEqual(next(cron("@daily")), next(cron("0 0 * * *")))
+assert.equal(pair(cron("@weekly /usr/bin/backup --all"), "Command"), "/usr/bin/backup --all")
+const tab = cron("# nightly\nMAILTO=me@example.com\n30 2 * * * /bin/job\n0 3 * * * /bin/other")
+assert.equal(pair(tab, "Command"), "/bin/job")
+assert.match(tab.info, /^First of 2 lines/)
+// Never runs strictly at "now"; starts from the next minute
+assert.equal(next(cron("0 12 * * *"))[0], "2024-01-02 12:00 Tue")
+// Errors
+assert.match(cron("61 * * * *").error, /^Minute: 61 is out of range \(0–59\)/)
+assert.match(cron("0 25 * * *").error, /^Hour: 25 is out of range/)
+assert.match(cron("0 0 0 * *").error, /^Day of month: 0 is out of range/)
+assert.match(cron("0 0 * 13 *").error, /^Month: 13 is out of range/)
+assert.match(cron("* * * *").error, /Expected 5 fields/)
+assert.match(cron("0 0 L * *").error, /Quartz/)
+assert.match(cron("0 */5 * * * ?").error, /seconds field/)
+assert.match(cron("5-1 * * * *").error, /goes backwards/)
+assert.match(cron("*/0 * * * *").error, /positive/)
+assert.match(cron("0 0 * * FOO").error, /not a valid value/)
+assert.match(cron("@reboot").error, /no schedule/)
+assert.match(cron("@often").error, /Unknown macro/)
+assert.match(cron("x".repeat(2000)).error, /Too long/)
+assert.equal(cron("").info, "Enter a cron expression or pick a preset")
+// Every preset parses and runs
+T.CRON_PRESETS.forEach((p) => assert.equal(next(cron(p.expr)).length, 10, p.expr))
+// Clipboard detection
+for (const s of ["*/5 * * * *", "0 9 * * MON-FRI", "@daily", "0 0 1 */3 *"]) assert.equal(T.detect(s), "cron", s)
+for (const s of ["1 2 3 4 5", "hello there my good friend"]) assert.equal(T.detect(s), "", s)
+
 console.log("tools.test.mjs: ok")
