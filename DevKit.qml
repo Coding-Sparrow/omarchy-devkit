@@ -32,8 +32,42 @@ Item {
   readonly property color fieldFill: Qt.rgba(foreground.r, foreground.g, foreground.b, 0.035)
   readonly property string fontFamily: Style.font.family
 
-  readonly property int preferredWidth: Style.space(1080)
-  readonly property int preferredHeight: Style.space(680)
+  // ---- window size: a share of the monitor DevKit opens on, so it suits a
+  // laptop and a 4K display alike. A summon payload can override the share
+  // ({"width": 0.8, "height": 0.85}); it lasts until the shell restarts.
+  readonly property real defaultWidthRatio: 0.62
+  readonly property real defaultHeightRatio: 0.7
+  property real widthRatio: defaultWidthRatio
+  property real heightRatio: defaultHeightRatio
+  readonly property int minWidth: Style.space(760)
+  readonly property int minHeight: Style.space(480)
+  property bool remapping: false
+  property int windowWidth: Style.space(1080)
+  property int windowHeight: Style.space(680)
+
+  // The focused monitor's logical size (after scaling and rotation).
+  function focusedScreen() {
+    var name = Hyprland.focusedMonitor ? Hyprland.focusedMonitor.name : ""
+    var screens = Quickshell.screens
+    for (var i = 0; i < screens.length; i++) if (screens[i].name === name) return screens[i]
+    return screens.length ? screens[0] : null
+  }
+
+  function ratio(value, fallback) {
+    var n = Number(value)
+    return isFinite(n) && n >= 0.3 && n <= 1 ? n : fallback
+  }
+
+  function fitToScreen() {
+    var scr = focusedScreen()
+    if (!scr || !(scr.width > 0) || !(scr.height > 0)) return
+    // Leave room for gaps and the bar; never smaller than the layout needs,
+    // unless the screen itself is smaller.
+    var maxW = Math.max(1, scr.width - Style.space(40)), maxH = Math.max(1, scr.height - Style.space(80))
+    windowWidth = Math.min(maxW, Math.max(minWidth, Math.round(scr.width * widthRatio)))
+    windowHeight = Math.min(maxH, Math.max(minHeight, Math.round(scr.height * heightRatio)))
+    window.screen = scr
+  }
 
   // ---- tool state
   readonly property var tools: Tools.TOOLS
@@ -90,6 +124,18 @@ Item {
     }
     var payload = ({})
     try { payload = JSON.parse(payloadJson || "{}") } catch (e) { payload = ({}) }
+    if (payload.width !== undefined) widthRatio = ratio(payload.width, widthRatio)
+    if (payload.height !== undefined) heightRatio = ratio(payload.height, heightRatio)
+    // Sized on every open, while hidden, so it maps at the right size on
+    // whichever monitor is focused; and at once when a payload asks.
+    var resize = payload.width !== undefined || payload.height !== undefined
+    if (window.visible && resize) {
+      // Hyprland keeps a mapped window's size, so re-show it at the new one.
+      remapping = true
+      window.visible = false
+      remapping = false
+    }
+    if (!window.visible) fitToScreen()
     opened = true
     window.visible = true
     // Apply the whole payload before computing; see selectTool().
@@ -461,7 +507,7 @@ Item {
 
   Process {
     id: windowRuleProc
-    command: [root.pluginDir + "/bin/devkit-window", String(root.preferredWidth), String(root.preferredHeight)]
+    command: [root.pluginDir + "/bin/devkit-window"]
     onExited: function () {
       root.windowRuleReady = true
       if (!root.pendingPayload) return
@@ -675,11 +721,11 @@ Item {
     visible: false
     title: "DevKit"
     color: root.background
-    implicitWidth: root.preferredWidth
-    implicitHeight: root.preferredHeight
-    minimumSize: Qt.size(Style.space(760), Style.space(480))
+    implicitWidth: root.windowWidth
+    implicitHeight: root.windowHeight
+    minimumSize: Qt.size(Math.min(root.minWidth, root.windowWidth), Math.min(root.minHeight, root.windowHeight))
 
-    onVisibleChanged: if (!visible && root.opened) root.dismiss()
+    onVisibleChanged: if (!visible && root.opened && !root.remapping) root.dismiss()
 
     BorderSurface {
       anchors.fill: parent

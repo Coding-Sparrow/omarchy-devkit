@@ -122,6 +122,16 @@ Each tool remembers its input until the shell restarts. Inputs are never saved.
 
 DevKit has no settings file. The window follows your Omarchy theme and font.
 
+**Window size.** DevKit opens at 62% of the width and 70% of the height of the
+focused monitor (about 1590×1010 on a 1440p screen, 1190×760 on 1080p), and
+never smaller than 760×480. To use a different share, pass `width` and
+`height` (0.3 to 1) when opening it, for example from your keybinding. The
+choice lasts until the shell restarts:
+
+```lua
+o.bind("SUPER + ALT + D", "DevKit", "omarchy-shell shell summon coding-sparrow.devkit '{\"width\":0.8,\"height\":0.85}'")
+```
+
 **Move the bar icon:**
 
 ```bash
@@ -157,7 +167,8 @@ Payload fields: `tool` (`json`, `jwt`, `base64`, `url`, `time`, `uuid`,
 `color`, `lines`, `markdown`), `mode` (for example `minify`, `yaml`, `ts`, `decode`,
 `parse`, `v7`, `ulid`, `utc`, `shell` or `count`), `input`, `input2` (the diff's second text),
 `pattern`, `flags`, `replacement`, `length` (password length), `count` (UUIDs
-or passwords), `sample: true` (load the tool's sample), and
+or passwords), `width` and `height` (window size as a share of the monitor),
+`sample: true` (load the tool's sample), and
 `action: "clipboard"`.
 
 ## Update

@@ -1,15 +1,8 @@
 #!/usr/bin/env bash
-# Register a Hyprland window rule so the DevKit window opens floating,
-# centered and sized, instead of being tiled. Re-run after config reloads.
+# Register a Hyprland window rule so the DevKit window opens floating and
+# centered instead of being tiled. Re-run after config reloads. The size is
+# not set here: DevKit sizes its window as a share of the focused monitor.
 set -euo pipefail
-
-width=${1:-}
-height=${2:-}
-
-[[ $width =~ ^[0-9]+$ && $height =~ ^[0-9]+$ ]] || {
-  echo "usage: devkit-window WIDTH HEIGHT" >&2
-  exit 2
-}
 
 [[ $(hyprctl -j status | jq -r '.configProvider // ""') == lua ]] || exit 2
 
@@ -26,7 +19,6 @@ _G.coding_sparrow_devkit_window_rule = hl.window_rule({
   },
   float = true,
   center = true,
-  size = { $width, $height },
 })
 LUA
 
