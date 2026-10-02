@@ -15,7 +15,7 @@ what you type to disk. Copies use `wl-copy --sensitive`, so decoded secrets
 stay out of clipboard history.
 
 **Contents:** [Tools](#tools) · [What's new](#whats-new-in-02) · [Working with DevKit](#working-with-devkit) ·
-[Screenshots](#screenshots) · [Requirements](#requirements) · [Install](#install) ·
+[Screenshots](#screenshots) · [Requirements](#requirements) · [Cost to the shell](#cost-to-the-shell) · [Install](#install) ·
 [Keys](#keys) · [Configure](#configure) · [Update](#update) · [Remove](#remove) ·
 [Privacy and security](#privacy-and-security) · [Troubleshooting](#troubleshooting) ·
 [Develop](#develop) · [License](#license)
@@ -154,28 +154,53 @@ stay out of clipboard history.
 
 - **Omarchy 4** (the Quickshell-based `omarchy-shell`), with Hyprland using its
   Lua config (the Omarchy 4 default).
-- Runtime tools, installed by default on Omarchy:
+- Nothing else to install: a default Omarchy has every package DevKit uses.
 
-  | Package | Used for |
-  | --- | --- |
-  | `python` (`python3`) | The helpers in `bin/`: hashing and CSPRNG bytes, the bounded clipboard reader, the regex deadline, and `devkit-helper` (JWT signatures, images, QR codes) |
-  | `qt6-declarative` | Its `qml` runtime runs the regex and chain worker outside the shell |
-  | `wl-clipboard` | `wl-paste` and `wl-copy --sensitive` |
-  | `openssl` | Verifying RS/PS/ES/EdDSA JWT signatures |
-  | `jq`, `hyprland` | `bin/devkit-window` registers the rule that floats and centres the window |
+  | Package | Comes with | Used for |
+  | --- | --- | --- |
+  | `python` (`python3`) | `uwsm` | The helpers in `bin/`: hashing and CSPRNG bytes, the bounded clipboard reader, the regex deadline, and `devkit-helper` (JWT signatures, images, QR codes) |
+  | `qt6-declarative` | `quickshell` | Its `qml` runtime runs the regex and chain worker outside the shell |
+  | `wl-clipboard` | Omarchy | `wl-paste` and `wl-copy --sensitive` |
+  | `openssl` | Arch base | Verifying RS/PS/ES/EdDSA JWT signatures |
+  | `jq`, `hyprland` | Omarchy | `bin/devkit-window` registers the rule that floats and centres the window |
+  | `qrencode` | Omarchy | **QR Code** |
+  | `zbar` (`zbarimg`) | Omarchy | **QR Reader** |
 
-- Optional: the `qrencode` package for **QR Code** and the `zbar` package
-  (which provides `zbarimg`) for **QR Reader**. Install them with Omarchy's
-  package installer or pacman. Each tool tells you in place when its
-  program is missing; everything else works without them.
+  If you removed `qrencode` or `zbar`, the QR tool says so in place and
+  everything else keeps working.
 
 There is nothing to build and no network access.
+
+## Cost to the shell
+
+DevKit runs inside `omarchy-shell`, next to the bar, notifications and the
+lock screen, so it is built to cost nothing until you use it. Measured on
+Omarchy 4 (the shell's resident memory):
+
+| | Shell memory |
+| --- | --- |
+| DevKit disabled | 479 MB |
+| DevKit enabled, closed | 480 MB, the same |
+| DevKit open | about 42 MB more, freed five minutes after you close it |
+
+- **Loaded only while you use it.** The shell builds DevKit when you open it
+  (about 0.2 s) and frees it five minutes after you close it. Reopen within
+  those five minutes and it is instant, with your input still there.
+- **Nothing heavy on the shell's thread.** Tools run on a worker thread, so
+  formatting a 1 MB document doesn't stall the bar. What's left on the
+  shell's thread is drawing the text: about 0.5 ms per KiB you paste, once.
+  The output box shows the first 128 KiB of a larger result.
+- **No polling.** Closed, DevKit polls nothing and runs no processes. Open,
+  it ticks only to keep the Timestamp, Cron, JWT and ID tools' times current.
 
 ## Install
 
 ```bash
 omarchy plugin add https://github.com/Coding-Sparrow/omarchy-devkit.git --enable
 ```
+
+DevKit is also listed on the [Omarchy plugin marketplace](https://omarchyplugins.com)
+under Developer Tools.
 
 This clones the repo into `~/.config/omarchy/plugins/coding-sparrow.devkit/`,
 enables it, and puts the `` icon on the right side of the bar. Without
