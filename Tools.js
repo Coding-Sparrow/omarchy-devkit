@@ -3620,7 +3620,7 @@ function shellQuote(s) {
   return "'" + s.replace(/'/g, "'\\''") + "'"
 }
 
-var ESCAPE_MAX = 262144      // escaping is for snippets; keeps the UI thread responsive
+var ESCAPE_MAX = 262144      // escaping is for snippets; keeps answers quick
 
 function escapeTool(input, mode) {
   if (input === "") return result()

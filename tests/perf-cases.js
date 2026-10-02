@@ -1,4 +1,5 @@
-// Worst-case inputs for every tool that runs on the shell's UI thread.
+// Worst-case inputs for every tool. They run on the worker thread (ToolWorker.js), not the shell's UI thread,
+// but a worker cannot be interrupted, so each must still finish within budget.
 // Plain ES so the same cases run in node (tests/perf.test.mjs) and in Qt's
 // V4 engine (tests/perf-v4.qml), which is what the shell actually uses.
 var PERF_N = 1 << 20

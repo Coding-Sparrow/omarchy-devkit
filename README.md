@@ -81,6 +81,13 @@ stay out of clipboard history.
 
 ## What's new in 0.2
 
+- **0.3.0: nothing heavy on the shell's thread.** Every tool now runs on a
+  worker thread. Before, formatting or detecting a large document ran on the
+  shell's UI thread, and the bar, notifications and the rest of the desktop
+  shell stood still until it finished (up to a second for a 1 MB document).
+  The output box shows the first 128 KiB of a larger result; Copy and
+  → Input still use all of it.
+
 - **0.2.1: nothing loaded while closed.** The shell builds DevKit when you
   open it and frees it five minutes after you close it. Before, it held
   about 15–20 MB of shell memory from login on, even if you never opened it.
@@ -300,9 +307,17 @@ If you added a keybinding, delete it from `~/.config/hypr/bindings.lua`.
   by `bin/devkit-helper` with a 16 MiB cap.
 - **User regexes never run in the shell.** The Regex Tester and any chain with a
   regex step run in a separate `qml` process (same engine, same `Tools.js`),
-  killed after 1.5 s, so `(a+)+$` cannot freeze the desktop shell. Everything
-  else is linear or near it and size-capped; `tests/perf-cases.js` holds over
-  a hundred worst cases, run in node and in Qt's own V4 engine.
+  killed after 1.5 s, so `(a+)+$` cannot freeze the desktop shell.
+- **No tool runs on the shell's UI thread.** The bar, notifications and the
+  lock screen share a thread with every Omarchy plugin. DevKit's tools,
+  chains and clipboard detection run on a Qt worker thread
+  (`ToolWorker.js`), so a 1 MB document being formatted never holds them
+  up. Work there is linear or near it and size-capped; `tests/perf-cases.js`
+  holds over a hundred worst cases, run in node and in Qt's own V4 engine,
+  and `tests/worker-v4.qml` fails if the UI thread stalls 50 ms while the
+  worker runs the heaviest of them. What remains on the UI thread is drawing
+  the text: the output box shows at most 128 KiB (Copy takes all of it), and
+  pasting a very large input costs Qt about 0.5 ms per KiB to lay out, once.
 - **Secure randomness only.** UUIDs, passwords and tokens use bytes from Python's
   `secrets`, drawn with rejection sampling. There is no `Math.random()`
   fallback. (Lorem ipsum, which is not a secret, uses a seeded generator.)
@@ -366,15 +381,18 @@ Keep a checkout wherever you like and symlink it to
 
 ```bash
 omarchy plugin enable coding-sparrow.devkit
-tests/run                    # logic, worst-case timing in node and Qt's V4, helpers (needs node)
+tests/run                    # logic, worst-case timing in node and Qt's V4, the worker, helpers (needs node)
 omarchy restart shell        # load QML edits
 ```
 
 - `Tools.js`: every tool as pure functions, plus the registry (`TOOLS`) the
-  window renders from. Loaded by QML, by the regex/chain worker and by the node
+  window renders from. Loaded by QML, by the tool worker, by the regex/chain worker and by the node
   tests. A tool declares its modes and options there; most need no QML at all.
 - `DevKit.qml`: the window and its state. `ui/`: the sidebar, chain editor,
   history, help card and shared components.
+- `ToolWorker.js`: runs `Tools.js` on Qt's worker thread. `DevKit.qml` sends
+  every computation there (`askWorker`) and keeps only the newest answer per
+  kind of request, so the shell's UI thread only posts and draws.
 - `bin/`: the helpers. Anything that needs a process (hashing, signatures,
   images, QR codes, regexes) runs there and answers in one JSON line.
 

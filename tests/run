@@ -19,8 +19,15 @@ done
 if [[ -n $qml ]]; then
   QT_QPA_PLATFORM=offscreen QT_FORCE_STDERR_LOGGING=1 QT_MESSAGE_PATTERN='%{message}' \
     timeout 300 "$qml" -a core tests/perf-v4.qml
+  # The UI thread must stay free while ToolWorker.js does the work.
+  QT_QPA_PLATFORM=offscreen QT_FORCE_STDERR_LOGGING=1 QT_MESSAGE_PATTERN='%{message}' \
+    timeout 120 "$qml" tests/worker-v4.qml >/tmp/devkit-worker-v4.$$ 2>&1 || {
+    cat /tmp/devkit-worker-v4.$$; rm -f /tmp/devkit-worker-v4.$$; exit 1
+  }
+  tail -1 /tmp/devkit-worker-v4.$$
+  rm -f /tmp/devkit-worker-v4.$$
 else
-  echo "perf-v4.qml: skipped (no qml runtime)"
+  echo "perf-v4.qml, worker-v4.qml: skipped (no qml runtime)"
 fi
 python3 tests/helpers.test.py
 echo "all tests passed"

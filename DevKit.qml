@@ -101,11 +101,49 @@ Item {
   property string outImage: ""         // a picture bin/devkit-helper wrote
   property var preSample: null         // the user's fields before Sample, to restore
   property var diffRows: []
-  // A tool the output could go to next ("→ JSON"), from Tools.detect.
-  readonly property string nextTool: {
-    if (!outText || outText.length > 1048576 || kind !== "text" || outPairs.length > 0 || outHtml !== "") return ""
-    var t = Tools.detect(outText)
-    return t && t !== toolId ? t : ""
+  // A tool the output could go to next ("→ JSON"), from Tools.detect on the
+  // worker thread. Whatever sets the output, the check follows it.
+  property string nextTool: ""
+
+  // A text editor lays out everything it holds on the UI thread, about 0.5 ms
+  // per KiB. The output is read-only, so it shows at most outViewMax
+  // characters; Copy, → Input and hand-offs always use all of outText.
+  readonly property int outViewMax: 131072
+  readonly property bool outClipped: outText.length > outViewMax
+  readonly property string outView: outClipped ? clipForView(outText, outViewMax) : outText
+
+  function clipForView(s, max) {
+    var cut = s.lastIndexOf("\n", max)
+    if (cut < max - 4096) cut = max
+    var c = s.charCodeAt(cut - 1)
+    if (c >= 0xD800 && c <= 0xDBFF) cut--
+    return s.slice(0, cut)
+  }
+
+  // Lines in s, without building an array of them.
+  function lineCount(s) {
+    var n = 1, i = -1
+    while ((i = s.indexOf("\n", i + 1)) !== -1) n++
+    return n
+  }
+
+  function sizeStatus(s) {
+    if (!s) return ""
+    var lines = lineCount(s)
+    return s.length + " chars" + (lines > 1 ? " · " + lines + " lines" : "")
+  }
+  onOutTextChanged: Qt.callLater(detectNextTool)
+  onOutPairsChanged: Qt.callLater(detectNextTool)
+  onOutHtmlChanged: Qt.callLater(detectNextTool)
+  onToolIdChanged: Qt.callLater(detectNextTool)
+
+  function detectNextTool() {
+    if (!outText || outText.length > 1048576 || kind !== "text" || outPairs.length > 0 || outHtml !== "") {
+      cancelWorker("next")
+      nextTool = ""
+      return
+    }
+    askWorker("next", { text: outText }, toolId)
   }
 
   // ---- clipboard hint
@@ -443,7 +481,7 @@ Item {
     var bytes = takeRandom(need)
     if (!bytes) { waitForRandom(need); return }
     randomWanted = 0
-    applyResult(Tools.run("uuid", { mode: mode, count: countField.text, upper: upper, nowMs: Date.now(), randomBytes: bytes }))
+    runTool("uuid", { mode: mode, count: countField.text, upper: upper, nowMs: Date.now(), randomBytes: bytes })
   }
 
   function passwordOptions() {
@@ -461,7 +499,7 @@ Item {
     if (!bytes) { waitForRandom(need); return }
     randomWanted = 0
     o.randomBytes = bytes
-    applyResult(Tools.run("password", o))
+    runTool("password", o)
   }
 
   function applyResult(r) {
@@ -483,6 +521,8 @@ Item {
 
   function compute() {
     if (restoring) return
+    // Whatever runs now replaces a result still on its way.
+    cancelWorker("run")
     if (toolId === "uuid") { computeUuid(); return }
     if (toolId === "password") { computePassword(); return }
     if (toolId === "regex") { computeRegex(); return }
@@ -495,12 +535,88 @@ Item {
       slowDebounce.restart()
       return
     }
-    var state = currentState()
-    var r = Tools.run(toolId, state)
+    runTool(toolId, currentState())
+  }
+
+  // Tools.run on the worker thread; toolRan() applies the newest answer.
+  function runTool(id, state) {
+    askWorker("run", { tool: id, state: state }, { tool: id, state: state })
+    workingTimer.restart()
+  }
+
+  function toolRan(r, ctx) {
+    workingTimer.stop()
+    if (ctx.tool !== toolId) return
     applyResult(r)
-    if (r.job) scheduleJob(r, state)
+    if (r.job) scheduleJob(r, ctx.state)
     else if (tool.job) { jobPartial = null; jobSeq++ }
     if (tool.kind === "image" && !r.job && r.image === undefined && (r.error || !r.output)) outImage = ""
+  }
+
+  // ------------------------------------------------------------ tool worker
+
+  // Tools.js runs on Qt's worker thread (ToolWorker.js), never on the
+  // shell's UI thread. One request per op is in flight; a newer one waits
+  // and replaces any older waiting one, so fast typing on a large input
+  // costs one run, not one per key. Only the newest answer per op is used.
+  property int workerSeq: 0
+  property var workerOps: ({})         // op -> { seq, busy, queued, ctx }
+
+  function workerOp(op) {
+    if (!workerOps[op]) workerOps[op] = { seq: 0, busy: false, queued: null, ctx: null }
+    return workerOps[op]
+  }
+
+  function askWorker(op, request, ctx) {
+    var w = workerOp(op)
+    request.op = op
+    request.seq = ++workerSeq
+    w.seq = request.seq
+    w.ctx = ctx === undefined ? null : ctx
+    w.queued = request
+    flushWorker(w)
+  }
+
+  function flushWorker(w) {
+    if (w.busy || !w.queued || !toolWorker.ready) return
+    var request = w.queued
+    w.queued = null
+    w.busy = true
+    toolWorker.sendMessage(request)
+  }
+
+  // Forget the answer to anything already asked.
+  function cancelWorker(op) {
+    var w = workerOp(op)
+    w.seq = ++workerSeq
+    w.queued = null
+    w.ctx = null
+  }
+
+  function workerAnswered(m) {
+    var w = workerOp(m.op)
+    w.busy = false
+    flushWorker(w)
+    if (m.seq !== w.seq) return
+    var ctx = w.ctx
+    if (m.op === "run") toolRan(m.result, ctx)
+    else if (m.op === "chain") { if (ctx === chainId && toolId === "chains") chainResult = m.result }
+    else if (m.op === "next") nextTool = ctx === toolId && m.tool && m.tool !== toolId ? m.tool : ""
+    else if (m.op === "detect") clipboardDetected(ctx.text, ctx.intent, m.tool, m.mode)
+  }
+
+  WorkerScript {
+    id: toolWorker
+    source: "ToolWorker.js"
+    onReadyChanged: if (ready) for (var op in root.workerOps) root.flushWorker(root.workerOps[op])
+    onMessage: function (m) { root.workerAnswered(m) }
+  }
+
+  // A large input can take a moment; say so instead of showing stale output.
+  Timer {
+    id: workingTimer
+    interval: 250
+    onTriggered: { if (root.workerOp("run").busy) { root.infoText = "Working…"; root.infoUrgent = false } }
   }
 
   // Opaque theme colours for the preview's inline styles.
@@ -813,6 +929,7 @@ Item {
   }
 
   function runChain() {
+    cancelWorker("chain")
     if (toolId !== "chains") return
     if (!chainId) { chainResult = ({ output: "", error: "", info: "", steps: [] }); return }
     var input = chainInputs[chainId] || ""
@@ -822,7 +939,7 @@ Item {
       regexDebounce.restart()
       return
     }
-    chainResult = Tools.chainRun(chainSteps, input, Date.now(), false)
+    askWorker("chain", { steps: chainSteps, input: input, nowMs: Date.now() }, chainId)
   }
 
   // ------------------------------------------------------------ history
@@ -946,11 +1063,14 @@ Item {
     if (intent === "paste2") { input2Ed.text = text; input2Ed.area.forceActiveFocus(); return }
     if (intent === "paste") { inputEd.text = text; inputEd.area.forceActiveFocus(); return }
     if (intent === "paste-chain") { if (chainLoader.item) chainLoader.item.inputEditor.text = text; return }
-    var detected = Tools.detect(text)
+    askWorker("detect", { text: text }, { text: text, intent: intent })
+  }
+
+  function clipboardDetected(text, intent, detected, m) {
+    if (!opened) return
     if (intent === "load" && detected) {
       clipTool = ""
       selectTool(detected)
-      var m = Tools.detectMode(detected, text)
       if (m) mode = m
       inputEd.text = text.trim()
       compute()
@@ -1659,7 +1779,7 @@ Item {
               Layout.horizontalStretchFactor: root.toolId === "cron" ? 2 : (root.takesImage ? 1 : 1)
               title: root.toolId === "diff" ? "Original" : (root.toolId === "regex" ? "Test text"
                 : root.takesImage ? "Image path" : (root.toolId === "jwt" && root.mode === "sign" ? "Payload" : "Input"))
-              status: inputEd.text.length > 0 ? inputEd.text.length + " chars" + (inputEd.text.indexOf("\n") !== -1 ? " · " + (inputEd.text.split("\n").length) + " lines" : "") : ""
+              status: root.sizeStatus(inputEd.text)
               Editor {
                 id: inputEd
                 anchors.fill: parent
@@ -1694,7 +1814,7 @@ Item {
               Layout.horizontalStretchFactor: root.toolId === "cron" ? 3 : 1
               title: root.outHtml !== "" ? "Preview" : (root.tool.kind === "image" && root.toolId !== "qrread" ? "Image" : "Output")
               status: root.outText && root.outPairs.length === 0 && root.outHtml === "" && root.tool.kind !== "image"
-                ? root.outText.length + " chars" + (root.outText.indexOf("\n") !== -1 ? " · " + root.outText.split("\n").length + " lines" : "") : ""
+                ? root.sizeStatus(root.outText) + (root.outClipped ? " · showing the first " + Math.round(root.outViewMax / 1024) + " KiB; Copy takes all" : "") : ""
 
               // Colour swatch with white and black text on it
               Rectangle {
@@ -1806,7 +1926,7 @@ Item {
                 anchors.topMargin: root.toolId === "color" && root.swatch !== null ? Style.space(64) + Style.spacing.md : 0
                 visible: root.outPairs.length === 0 && root.outHtml === "" && root.tool.kind !== "image"
                 readOnly: true
-                text: root.outText
+                text: root.outView
                 placeholderText: root.errText ? "" : root.kind === "generator" ? "Press Generate" : ""
               }
               PairList {
