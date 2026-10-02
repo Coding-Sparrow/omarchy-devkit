@@ -164,7 +164,15 @@ Item {
   property bool windowRuleReady: false
   property string pendingPayload: ""
 
+  // DevKit is not kept loaded: the shell builds it on the first open and frees
+  // it when hidden. Closing it from inside (Esc, the window's close, a toggle
+  // payload) keeps it in memory for unloadAfterMs so a quick reopen finds your
+  // input where you left it; then it hands itself back to the shell, which
+  // destroys it. Closed, DevKit costs only its bar icon.
+  readonly property int unloadAfterMs: 5 * 60 * 1000
+
   function open(payloadJson) {
+    unloadTimer.stop()
     if (!windowRuleReady) {
       pendingPayload = payloadJson || "{}"
       if (!windowRuleProc.running) windowRuleProc.running = true
@@ -172,6 +180,9 @@ Item {
     }
     var payload = ({})
     try { payload = JSON.parse(payloadJson || "{}") } catch (e) { payload = ({}) }
+    // {"action":"toggle"} closes an open window but keeps DevKit warm, where
+    // the shell's own toggle would free it at once.
+    if (payload.action === "toggle" && opened) { dismiss(); return }
     if (payload.width !== undefined) widthRatio = ratio(payload.width, widthRatio)
     if (payload.height !== undefined) heightRatio = ratio(payload.height, heightRatio)
     var resize = payload.width !== undefined || payload.height !== undefined
@@ -218,10 +229,17 @@ Item {
     clipText = ""
     clipImage = ""
     helpOpen = false
+    // The shell may destroy DevKit right after this; write pending state now.
+    if (persistTimer.running) { persistTimer.stop(); saveState() }
   }
 
   function dismiss() {
     close()
+    unloadTimer.restart()
+  }
+
+  function unload() {
+    if (opened) return
     if (shell && typeof shell.hide === "function") shell.hide(pluginId)
   }
 
@@ -1209,6 +1227,7 @@ Item {
   }
 
   Timer { id: persistTimer; interval: 500; onTriggered: root.saveState() }
+  Timer { id: unloadTimer; interval: root.unloadAfterMs; onTriggered: root.unload() }
   Timer { id: toastTimer; interval: 1800; onTriggered: root.toast = "" }
   Timer { id: chainDebounce; interval: 120; onTriggered: root.runChain() }
 

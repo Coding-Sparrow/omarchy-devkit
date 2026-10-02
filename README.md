@@ -81,6 +81,13 @@ stay out of clipboard history.
 
 ## What's new in 0.2
 
+- **0.2.1: nothing loaded while closed.** The shell builds DevKit when you
+  open it and frees it five minutes after you close it. Before, it held
+  about 15–20 MB of shell memory from login on, even if you never opened it.
+  Closed, it now costs only its bar icon. The first open after an unload
+  takes about 0.2 s; reopening within five minutes is instant and your input
+  is still there.
+
 - 14 new tools: Base64 Image, Unicode Inspector, JSON ⇄ YAML (now both ways),
   JSON ⇄ CSV as its own tool, XML, HTML, CSS and SQL formatters, Text
   Statistics, HTML Preview, QR Code, QR Reader, Lorem Ipsum and ID Inspector.
@@ -117,7 +124,8 @@ stay out of clipboard history.
   unique emails); edit, rename, duplicate or delete them, and add your own.
   Regex steps run in the same deadline-bound worker as the Regex Tester.
 - **History** (`Ctrl+H`). What you worked on this session, newest first; click
-  an entry to pick up where you left off. History lives in memory only.
+  an entry to pick up where you left off. History lives in memory only and
+  goes when DevKit unloads, five minutes after you close it.
 - **All keys:** `F1`.
 
 ## Screenshots
@@ -198,11 +206,11 @@ The window follows your Omarchy theme and font.
 
 **Window size.** DevKit opens at 66% of the width and 74% of the height of the
 focused monitor, never smaller than 860×520. To use a different share, pass
-`width` and `height` (0.3 to 1) when opening it; the choice lasts until the
-shell restarts:
+`width` and `height` (0.3 to 1) when opening it; the choice lasts until
+DevKit unloads, so put it in the keybinding:
 
 ```lua
-o.bind("SUPER + ALT + D", "DevKit", "omarchy-shell shell toggle coding-sparrow.devkit '{\"width\":0.8,\"height\":0.85}'")
+o.bind("SUPER + ALT + D", "DevKit", "omarchy-shell shell summon coding-sparrow.devkit '{\"action\":\"toggle\",\"width\":0.8,\"height\":0.85}'")
 ```
 
 **Move or hide the bar icon:**
@@ -219,8 +227,13 @@ To keep DevKit but drop the icon, remove the widget in Setup > Bar.
 `omarchy menu keybindings --print`):
 
 ```lua
-o.bind("SUPER + ALT + D", "DevKit", "omarchy-shell shell toggle coding-sparrow.devkit")
+o.bind("SUPER + ALT + D", "DevKit", "omarchy-shell shell summon coding-sparrow.devkit '{\"action\":\"toggle\"}'")
 ```
+
+`{"action":"toggle"}` opens DevKit or closes it the way `Esc` does, keeping
+your input for the next five minutes. `omarchy-shell shell toggle
+coding-sparrow.devkit` works too, but its close frees DevKit at once and your
+input goes with it.
 
 **Open a specific tool or pass input** from a keybinding or script:
 
@@ -235,7 +248,7 @@ omarchy-shell shell summon coding-sparrow.devkit '{"action":"clipboard"}'
 Payload fields: `tool` (any id below), `mode`, `input`, `input2` (the diff's
 second text), `query` (JSON), `pattern`, `flags`, `replacement` (regex),
 `length` and `count` (passwords, UUIDs), `width` and `height`, `sample: true`
-and `action: "clipboard"`. Payloads written for 0.1 (`{"tool":"json","mode":"yaml"}`)
+and `action` (`"clipboard"` or `"toggle"`). Payloads written for 0.1 (`{"tool":"json","mode":"yaml"}`)
 still land in the right tool.
 
 Tool ids: `base64`, `base64img`, `url`, `escape`, `jwt`, `hash`, `number`,
@@ -250,8 +263,8 @@ omarchy plugin update coding-sparrow.devkit
 omarchy restart shell
 ```
 
-DevKit stays loaded between opens, so the running shell picks up new code only
-after a restart.
+The shell caches DevKit's code once it has loaded it, so restart the shell to
+run the new version.
 
 ## Remove
 
@@ -281,7 +294,7 @@ If you added a keybinding, delete it from `~/.config/hypr/bindings.lua`.
   screenshot) go to `$XDG_RUNTIME_DIR/coding-sparrow-devkit/` (0700, files
   0600, the newest dozen kept), which is in memory and cleared at logout.
   **Save** in the image tools writes to your Pictures folder only when you press it.
-- **History is memory only**, and leaves out secrets (JWT secrets, HMAC keys).
+- **History is memory only**, gone five minutes after you close DevKit, and leaves out secrets (JWT secrets, HMAC keys).
 - **Bounded clipboard reads.** `bin/devkit-clip` reads at most 1 MiB within 2 s
   and kills `wl-paste` either way. Partial data is never used. Images are read
   by `bin/devkit-helper` with a 16 MiB cap.

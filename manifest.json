@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "coding-sparrow.devkit",
   "name": "DevKit",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "author": "Coding-Sparrow",
   "license": "MIT",
   "description": "Thirty-two offline developer tools in a floating window: JSON (JSONC repair, queries), JWT decode, verify and sign, YAML, CSV, types (TypeScript, Zod, Go, Rust, JSON Schema), XML/HTML/CSS/SQL formatters, hashes and HMAC with checksum compare, Base64 and data: URI images, QR codes, Unicode and ID inspectors, regex, diff, cron, colours, passwords and more. Search, pinned tools, chains, history and clipboard detection.",
@@ -35,7 +35,6 @@
     "panel",
     "bar-widget"
   ],
-  "keepLoaded": true,
   "entryPoints": {
     "panel": "DevKit.qml",
     "barWidget": "BarWidget.qml"

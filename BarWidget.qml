@@ -25,7 +25,7 @@ BarWidget {
       if (mouseButton === Qt.RightButton)
         root.bar.run("omarchy-shell -q shell summon coding-sparrow.devkit '{\"action\":\"clipboard\"}'")
       else
-        root.bar.run("omarchy-shell -q shell toggle coding-sparrow.devkit")
+        root.bar.run("omarchy-shell -q shell summon coding-sparrow.devkit '{\"action\":\"toggle\"}'")
     }
   }
 }
