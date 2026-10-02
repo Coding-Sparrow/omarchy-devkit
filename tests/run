@@ -4,7 +4,7 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
 jq -e '.id == "coding-sparrow.devkit" and (.kinds | index("panel")) and (.kinds | index("bar-widget"))' manifest.json >/dev/null
 bash -n bin/devkit-window
-for helper in bin/devkit-hash bin/devkit-clip bin/devkit-regex; do
+for helper in bin/devkit-hash bin/devkit-clip bin/devkit-regex bin/devkit-helper; do
   python3 -m py_compile "$helper"
 done
 rm -rf bin/__pycache__

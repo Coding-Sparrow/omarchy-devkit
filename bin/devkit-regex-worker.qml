@@ -18,10 +18,13 @@ QtObject {
       xhr.open("GET", "file://" + args[args.length - 1], false)
       xhr.send()
       var req = JSON.parse(xhr.responseText)
-      out = Tools.regexTool(String(req.pattern || ""), String(req.flags || ""), String(req.input || ""),
-                            String(req.replacement || ""), req.useReplace === true)
+      if (Array.isArray(req.chain))
+        out = Tools.chainRun(req.chain, String(req.input || ""), Number(req.nowMs) || Date.now(), true)
+      else
+        out = Tools.regexTool(String(req.pattern || ""), String(req.flags || ""), String(req.input || ""),
+                              String(req.replacement || ""), req.useReplace === true)
       if (out.output.length > maxOutputChars)
-        out = { output: "", error: "Result is larger than " + maxOutputChars + " characters", info: "" }
+        out = { output: "", error: "Result is larger than " + maxOutputChars + " characters", info: "", steps: out.steps }
     } catch (e) {
       out = { output: "", error: "Regex worker error: " + e, info: "" }
     }

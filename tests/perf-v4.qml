@@ -9,6 +9,9 @@ QtObject {
   Component.onCompleted: {
     var cases = Perf.perfCases(Tools), slow = [], worst = 0, worstName = "", n = 0
     for (var name in cases) {
+      // Each case starts on a clean heap, as it would in the shell; otherwise
+      // garbage from the previous case is billed to this one.
+      gc()
       var start = Date.now()
       try { cases[name]() } catch (e) { slow.push(name + " threw " + e) }
       var ms = Date.now() - start

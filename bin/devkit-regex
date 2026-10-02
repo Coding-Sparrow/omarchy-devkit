@@ -10,6 +10,11 @@ answered within DEADLINE_S.
 
     devkit-regex < {"pattern":…,"flags":…,"input":…,"replacement":…,"useReplace":…}
                  -> {"output":…,"error":…,"info":…[,"timeout":true]}
+    devkit-regex < {"chain":[steps…],"input":…,"nowMs":…}
+                 -> the same, plus "steps": one report per chain step
+
+A chain with a regex step runs here for the same reason: its patterns are
+user-supplied.
 
 The request is read from stdin and handed to the worker in a file inside a
 fresh owner-only (0700) directory under $XDG_RUNTIME_DIR, removed as soon as
@@ -158,11 +163,15 @@ def run_worker(qml, request_path):
                 result = json.loads(line[len(MARKER):])
             except ValueError:
                 break
-            emit({
+            out = {
                 "output": str(result.get("output", "")),
                 "error": str(result.get("error", "")),
                 "info": str(result.get("info", "")),
-            })
+            }
+            # A chain also reports each step.
+            if isinstance(result.get("steps"), list):
+                out["steps"] = result["steps"]
+            emit(out)
             return 0
     return fail("The regex worker returned no result")
 

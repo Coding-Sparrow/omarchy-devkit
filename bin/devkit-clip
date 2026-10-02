@@ -9,6 +9,7 @@ seconds, killing wl-paste in both cases.
 Output is one status line, then the text only when the status is "ok":
 
     ok\\n<clipboard text>
+    image\\n<mime>      an image and no text (DevKit offers its image tools)
     empty\\n            nothing on the clipboard, or no text type offered
     too-large\\n        more than LIMIT_BYTES
     timeout\\n          the owner did not finish within DEADLINE_S
@@ -34,10 +35,32 @@ def kill_group(proc):
     proc.wait()
 
 
+TEXT_TYPES = ("text/", "UTF8_STRING", "STRING", "TEXT", "COMPOUND_TEXT")
+TYPES_DEADLINE_S = 0.5
+
+
+def offered_types(deadline):
+    """The clipboard's MIME types, or None if they could not be listed in time."""
+    status, data = bounded(["wl-paste", "--list-types"], min(deadline, time.monotonic() + TYPES_DEADLINE_S), 65536)
+    if status != "ok":
+        return None
+    return [t.strip() for t in data.decode("utf-8", "replace").splitlines() if t.strip()]
+
+
 def read_clipboard():
+    deadline = time.monotonic() + DEADLINE_S
+    types = offered_types(deadline)
+    if types is not None and types and not any(t.startswith(TEXT_TYPES) for t in types):
+        image = next((t for t in types if t.startswith("image/")), None)
+        if image:
+            return "image", image.encode()
+    return bounded(["wl-paste", "--no-newline", "--type", "text"], deadline, LIMIT_BYTES)
+
+
+def bounded(argv, deadline, limit):
     try:
         proc = subprocess.Popen(
-            ["wl-paste", "--no-newline", "--type", "text"],
+            argv,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
@@ -49,7 +72,6 @@ def read_clipboard():
     fd = proc.stdout.fileno()
     os.set_blocking(fd, False)
     data = bytearray()
-    deadline = time.monotonic() + DEADLINE_S
     while True:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
@@ -66,7 +88,7 @@ def read_clipboard():
         if not chunk:
             break
         data += chunk
-        if len(data) > LIMIT_BYTES:
+        if len(data) > limit:
             kill_group(proc)
             return "too-large", b""
 
@@ -84,7 +106,7 @@ def main():
     status, data = read_clipboard()
     out = sys.stdout.buffer
     out.write(status.encode() + b"\n")
-    if status == "ok":
+    if status in ("ok", "image"):
         out.write(data)
     out.flush()
     return 0
