@@ -97,8 +97,9 @@ ColumnLayout {
               implicitHeight: name.implicitHeight + Style.spacing.md * 2
               radius: Style.cornerRadius
               color: current ? Style.selectedFillFor(side.fg, Color.accent)
-                : (mouse.containsMouse || cursor) ? Style.hoverFillFor(side.fg, Color.accent) : "transparent"
+                : (rowHover.hovered || cursor) ? Style.hoverFillFor(side.fg, Color.accent) : "transparent"
               onCursorChanged: if (cursor) list.reveal(row)
+              HoverHandler { id: rowHover }
               Rectangle {
                 visible: row.current
                 width: 2; radius: 1
@@ -134,7 +135,7 @@ ColumnLayout {
                 anchors.rightMargin: Style.spacing.xs
                 anchors.verticalCenter: parent.verticalCenter
                 text: side.dk.keyHint(row.tool.shortcut)
-                visible: !mouse.containsMouse && text !== ""
+                visible: !rowHover.hovered && text !== ""
                 color: side.faint
                 font.pixelSize: Style.font.caption
               }
@@ -143,14 +144,17 @@ ColumnLayout {
                 anchors.right: parent.right
                 anchors.rightMargin: Style.spacing.md
                 anchors.verticalCenter: parent.verticalCenter
-                width: mouse.containsMouse || row.pinned ? implicitWidth : 0
+                // Always takes its space, so showing it never resizes the row's
+                // hover area (which would loop: hover → resize → hover).
                 text: row.pinned ? "★" : "☆"
-                visible: mouse.containsMouse || (row.pinned && rowLoader.modelData.section !== "pinned")
+                readonly property bool shown: rowHover.hovered || (row.pinned && rowLoader.modelData.section !== "pinned")
+                opacity: shown ? 1 : 0
                 color: pinMouse.containsMouse ? Color.accent : (row.pinned ? Color.accent : side.dim)
                 MouseArea {
                   id: pinMouse
                   anchors.fill: parent
                   anchors.margins: -Style.spacing.sm
+                  enabled: pin.shown
                   hoverEnabled: true
                   cursorShape: Qt.PointingHandCursor
                   onClicked: side.dk.togglePin(rowLoader.modelData.id)
@@ -159,7 +163,7 @@ ColumnLayout {
               MouseArea {
                 id: mouse
                 anchors.fill: parent
-                anchors.rightMargin: pin.width + Style.spacing.lg
+                anchors.rightMargin: pin.implicitWidth + Style.spacing.lg
                 hoverEnabled: true
                 acceptedButtons: Qt.LeftButton | Qt.RightButton
                 cursorShape: Qt.PointingHandCursor
