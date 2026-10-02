@@ -44,10 +44,14 @@ BorderSurface {
     asynchronous: true
     cache: false
     // Small pictures (a QR code, an icon, a 2×2 sample) are scaled up with
-    // hard pixel edges instead of being smeared into a blur.
-    readonly property bool tiny: status === Image.Ready && Math.max(implicitWidth, implicitHeight) <= 256
+    // hard pixel edges instead of being smeared into a blur. Set once per
+    // load, not bound: smoothing depends on it, and must not feed back into
+    // the load. No mipmap, which would reload the image when it changes.
+    property bool tiny: false
+    onStatusChanged: if (status === Image.Ready) tiny = Math.max(implicitWidth, implicitHeight) <= 256
+    onSourceChanged: tiny = false
     smooth: !root.pixelated && !tiny
-    mipmap: !root.pixelated && !tiny
+    mipmap: false
   }
   PlainText {
     anchors.centerIn: parent

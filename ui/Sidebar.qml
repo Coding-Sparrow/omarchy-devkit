@@ -61,7 +61,9 @@ ColumnLayout {
 
     ColumnLayout {
       id: column
-      width: list.width - (list.contentHeight > list.height ? Style.spacing.lg : 0)
+      // Always leaves the scrollbar's gutter. Leaving it only when the list
+      // overflows can oscillate: narrower rows wrap, wrapping overflows.
+      width: list.width - Style.spacing.lg
       spacing: 0
 
       Repeater {
@@ -154,7 +156,8 @@ ColumnLayout {
                   id: pinMouse
                   anchors.fill: parent
                   anchors.margins: -Style.spacing.sm
-                  enabled: pin.shown
+                  // Not bound to pin.shown: flipping a hover MouseArea's
+                  // `enabled` under the cursor re-delivers hover to the row.
                   hoverEnabled: true
                   cursorShape: Qt.PointingHandCursor
                   onClicked: side.dk.togglePin(rowLoader.modelData.id)

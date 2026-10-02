@@ -368,6 +368,7 @@ Item {
     noteRecent(t.id)
     if (t.id === "chains" && !chainId && chains.length) selectChain(chains[0].id)
     compute()
+    if (opened) Qt.callLater(focusInput)
     Qt.callLater(focusInput)
   }
 
@@ -991,7 +992,17 @@ Item {
   Process {
     id: windowRuleProc
     command: [root.pluginDir + "/bin/devkit-window"]
-    onExited: function () {
+    property int failures: 0
+    onExited: function (exitCode) {
+      // Without the rule the window is tiled into the current workspace and
+      // pushes its windows around, so try again before giving up on it.
+      if (exitCode !== 0 && exitCode !== 2 && failures < 4) {
+        failures++
+        ruleRetryTimer.restart()
+        return
+      }
+      if (exitCode !== 0) console.warn("DevKit: could not register its floating window rule (exit " + exitCode + ")")
+      failures = 0
       root.windowRuleReady = true
       if (!root.pendingPayload) return
       var p = root.pendingPayload
@@ -1006,6 +1017,12 @@ Item {
     function onRawEvent(event) {
       if (String(event && event.name || "") === "configreloaded") ruleReloadTimer.restart()
     }
+  }
+
+  Timer {
+    id: ruleRetryTimer
+    interval: 250
+    onTriggered: if (!windowRuleProc.running) windowRuleProc.running = true
   }
 
   Timer {
@@ -1322,6 +1339,7 @@ Item {
             ColumnLayout {
               spacing: Style.spacing.xxs
               Layout.fillWidth: true
+              Layout.minimumWidth: 0
               RowLayout {
                 spacing: Style.spacing.md
                 PlainText { text: root.tool.name; font.pixelSize: Style.font.title; font.bold: true }
@@ -1340,7 +1358,10 @@ Item {
               }
             }
             PlainText {
-              Layout.maximumWidth: Math.max(Style.space(160), parent.width * 0.45)
+              // A fixed cap: bounding it by its own row's width makes the row
+              // lay itself out again every time the text changes.
+              Layout.maximumWidth: Style.space(520)
+              Layout.minimumWidth: 0
               elide: Text.ElideRight
               horizontalAlignment: Text.AlignRight
               text: root.toast || (root.jobBusy && !root.infoText ? "Working…" : root.infoText)
