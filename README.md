@@ -14,7 +14,7 @@ Everything runs locally. DevKit makes no network requests and never writes
 what you type to disk. Copies use `wl-copy --sensitive`, so decoded secrets
 stay out of clipboard history.
 
-**Contents:** [Tools](#tools) · [Working with DevKit](#working-with-devkit) ·
+**Contents:** [Tools](#tools) · [What's new](#whats-new-in-02) · [Working with DevKit](#working-with-devkit) ·
 [Screenshots](#screenshots) · [Requirements](#requirements) · [Install](#install) ·
 [Keys](#keys) · [Configure](#configure) · [Update](#update) · [Remove](#remove) ·
 [Privacy and security](#privacy-and-security) · [Troubleshooting](#troubleshooting) ·
@@ -79,10 +79,24 @@ stay out of clipboard history.
 | **Lorem Ipsum** | | Paragraphs, sentences or words |
 | **ID Inspector** | `Ctrl+⇧I` | What an ID is and when it was made: UUID (v1–v8, with the time for v1/v6/v7), ULID, KSUID, MongoDB ObjectId, XID, Snowflake (Twitter/X and Discord), CUID and Nano ID. One per line |
 
+## What's new in 0.2
+
+- 14 new tools: Base64 Image, Unicode Inspector, JSON ⇄ YAML (now both ways),
+  JSON ⇄ CSV as its own tool, XML, HTML, CSS and SQL formatters, Text
+  Statistics, HTML Preview, QR Code, QR Reader, Lorem Ipsum and ID Inspector.
+- Deeper tools: JSONC/JSON5 repair and JSON queries; JWT signature
+  verification (HS, RS, PS, ES, EdDSA) and signing; SHA-224/384, SHA3,
+  BLAKE2, CRC32, HMAC, file hashing and checksum comparison; Zod, Go, Rust
+  and JSON Schema types; tokens and PINs.
+- A new window: `Ctrl+K` search, sections, pinned and recent tools, chains,
+  session history, hand-offs between tools, copied-image detection, `F1`.
+- Payloads written for 0.1 keep working.
+
 ## Working with DevKit
 
 - **Find a tool.** `Ctrl+K` and type: names, keywords and descriptions all
-  match (`sha256`, `yaml`, `snowflake`, `jfmt`). `↑`/`↓` and `Enter`.
+  match (`sha256`, `yaml`, `snowflake`, `checksum`). `↑`/`↓` and `Enter` opens
+  it with the cursor in its input.
 - **Pin what you use.** Right-click a tool, or click its ☆, or press `Ctrl+B`.
   Pinned tools sit at the top of the list; the last few you used follow them.
 - **Samples.** Every tool that takes input has a **Sample** button
@@ -135,11 +149,10 @@ stay out of clipboard history.
   | `openssl` | Verifying RS/PS/ES/EdDSA JWT signatures |
   | `jq`, `hyprland` | `bin/devkit-window` registers the rule that floats and centres the window |
 
-- Optional, for the two QR tools (each says so in place when its program is missing):
-
-  ```bash
-  omarchy pkg add qrencode zbar
-  ```
+- Optional: the `qrencode` package for **QR Code** and the `zbar` package
+  (which provides `zbarimg`) for **QR Reader**. Install them with Omarchy's
+  package installer or pacman. Each tool tells you in place when its
+  program is missing; everything else works without them.
 
 There is nothing to build and no network access.
 
@@ -302,8 +315,8 @@ JWTs; `qrencode`, `zbarimg`, `wl-paste`/`wl-copy` for images),
 
 ## Troubleshooting
 
-- **"qrencode is not installed" / "zbarimg is not installed".** Run
-  `omarchy pkg add qrencode zbar`.
+- **"qrencode is not installed" / "zbarimg is not installed".** Install the
+  `qrencode` or `zbar` package.
 - **JWT says "Could not read that key".** Paste the public key as PEM
   (`-----BEGIN PUBLIC KEY-----…`) or a certificate. A key pasted on one line is
   fine. JWKs are not read; convert them to PEM first.
@@ -320,6 +333,18 @@ JWTs; `qrencode`, `zbarimg`, `wl-paste`/`wl-copy` for images),
 - **Cron says "Quartz" or "seconds field".** DevKit reads the standard 5-field
   format (crontab, Kubernetes, GitHub Actions); drop the seconds field.
 - **Changes don't show after an update.** `omarchy restart shell`.
+- **The bar ignores clicks right after a restart.** The shell loads its
+  plugins for a few seconds after `omarchy restart shell`; wait for it.
+- **The bar or the whole shell freezes.** Please
+  [open an issue](https://github.com/Coding-Sparrow/omarchy-devkit/issues)
+  with the trace from a core dump, taken before restarting:
+
+  ```bash
+  kill -ABRT "$(pgrep -xf 'quickshell -n -p /usr/share/omarchy/shell')"
+  coredumpctl info quickshell | head -80
+  ```
+
+  The shell restarts itself afterwards.
 
 ## Develop
 
