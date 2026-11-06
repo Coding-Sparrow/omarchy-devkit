@@ -1456,6 +1456,7 @@ Item {
 
         // ------------------------------------------------ main
         ColumnLayout {
+          id: mainColumn
           Layout.fillWidth: true
           Layout.fillHeight: true
           // Takes what the sidebar leaves; its content wraps or elides.
@@ -1683,7 +1684,9 @@ Item {
 
             OptionBar {
               id: genericOptions
-              width: Math.max(implicitWidth, parent.width * (options.some(function (o) { return o.grow }) ? 1 : 0))
+              // The column, not the Flow: the Flow's width follows its own content until it
+              // is laid out, so binding to it grows without end and freezes the shell.
+              width: Math.max(implicitWidth, mainColumn.width * (options.some(function (o) { return o.grow }) ? 1 : 0))
               options: Tools.toolOptions(root.toolId, root.mode)
               values: root.opts
               revision: root.optsRevision

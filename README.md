@@ -81,6 +81,10 @@ stay out of clipboard history.
 
 ## What's new in 0.2
 
+- **0.3.1: no freeze on first open (Omarchy 4.5 / Qt 6.12).** The options row
+  sized itself from its own content, so the first open of a tool with a
+  stretching field (JSON's query) grew its width without end and froze the
+  whole shell. It now takes the column's width.
 - **0.3.0: nothing heavy on the shell's thread.** Every tool now runs on a
   worker thread. Before, formatting or detecting a large document ran on the
   shell's UI thread, and the bar, notifications and the rest of the desktop
